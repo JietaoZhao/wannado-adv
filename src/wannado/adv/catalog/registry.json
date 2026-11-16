@@ -1,0 +1,1527 @@
+{
+  "schema_version": "1.0",
+  "count": 35,
+  "algorithms": [
+    {
+      "id": "boundary",
+      "name": "Boundary Attack",
+      "family": "blackbox_decision",
+      "tier": "S",
+      "threat_model": "black_box_decision",
+      "requires_training": false,
+      "compute_cost": "high",
+      "supported_norms": [
+        "l2",
+        "linf",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl"
+      ],
+      "parent_id": null,
+      "diff_from_parent": "Origin of decision-based black-box attacks: walks randomly along the hard-label decision boundary while stepping toward the clean sample.",
+      "summary_plain": "Original label-only black-box attack that walks along the decision boundary from an adversarial start toward clean x.",
+      "when_to_use": "When benchmarking label-only models against the classic non-gradient random-walk baseline alongside HopSkipJump.",
+      "when_not_to_use": "When gradients/scores are exposed or lowest possible query count is critical (use hopskipjump or square_attack).",
+      "extension_hooks": [
+        "Swap Gaussian orthogonal proposals for DCT/Perlin priors for faster spatial convergence",
+        "Supply warm-start `x_init` from surrogate transfer or targeted class prototypes"
+      ],
+      "module_path": "wannado.adv.attacks.blackbox_decision.boundary_brendel2018",
+      "citation": {
+        "key": "brendel2018decision",
+        "title": "Decision-Based Adversarial Attacks: Reliable Attacks Against Black-Box Machine Learning Models",
+        "authors": "Wieland Brendel, Jonas Rauber, and Matthias Bethge",
+        "venue": "6th International Conference on Learning Representations (ICLR)",
+        "year": 2018,
+        "url": "https://arxiv.org/abs/1712.04248",
+        "bibtex": "@inproceedings{brendel2018decision,\n  title={Decision-Based Adversarial Attacks: Reliable Attacks Against Black-Box Machine Learning Models},\n  author={Brendel, Wieland and Rauber, Jonas and Bethge, Matthias},\n  booktitle={International Conference on Learning Representations (ICLR)},\n  year={2018},\n  url={https://arxiv.org/abs/1712.04248},\n}",
+        "ieee": "W. Brendel, J. Rauber, and M. Bethge, \"Decision-based adversarial attacks: Reliable attacks against black-box machine learning models,\" in Proc. Int. Conf. Learn. Represent. (ICLR), 2018.",
+        "apa": "Brendel, W., Rauber, J., & Bethge, M. (2018). Decision-based adversarial attacks: Reliable attacks against black-box machine learning models. International Conference on Learning Representations (ICLR)."
+      }
+    },
+    {
+      "id": "hopskipjump",
+      "name": "HopSkipJumpAttack (HSJA)",
+      "family": "blackbox_decision",
+      "tier": "S",
+      "threat_model": "black_box_decision",
+      "requires_training": false,
+      "compute_cost": "high",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl"
+      ],
+      "parent_id": "boundary",
+      "diff_from_parent": "Replaces random walk along the boundary with query-efficient Monte Carlo boundary-normal gradient estimation, geometric step-size search, and binary boundary projection.",
+      "summary_plain": "Label-only black-box attack that minimizes perturbation distance using binary search and Monte Carlo boundary gradient estimation.",
+      "when_to_use": "When you only observe final hard decisions (class labels) with zero access to gradients, probabilities, or logits.",
+      "when_not_to_use": "When gradients or logit scores are available (use APGD/C&W/FAB or Square Attack for far lower query cost) or for continuous regression without decision boundaries.",
+      "extension_hooks": [
+        "Swap isotropic Monte Carlo probes for frequency-subspace probes (QEBA)",
+        "Provide domain-specific x_init seeds for harder targeted attacks"
+      ],
+      "module_path": "wannado.adv.attacks.blackbox_decision.hopskipjump_chen2020",
+      "citation": {
+        "key": "chen2020hopskipjumpattack",
+        "title": "HopSkipJumpAttack: A Query-Efficient Decision-Based Attack",
+        "authors": "Jianbo Chen, Michael I. Jordan, and Martin J. Wainwright",
+        "venue": "2020 IEEE Symposium on Security and Privacy (SP)",
+        "year": 2020,
+        "url": "https://arxiv.org/abs/1904.02144",
+        "bibtex": "@inproceedings{chen2020hopskipjumpattack,\n  title={HopSkipJumpAttack: A Query-Efficient Decision-Based Attack},\n  author={Chen, Jianbo and Jordan, Michael I. and Wainwright, Martin J.},\n  booktitle={2020 IEEE Symposium on Security and Privacy (SP)},\n  pages={1277--1294},\n  year={2020},\n  organization={IEEE},\n  doi={10.1109/SP40000.2020.00045},\n  url={https://arxiv.org/abs/1904.02144},\n}",
+        "ieee": "J. Chen, M. I. Jordan, and M. J. Wainwright, \"HopSkipJumpAttack: A query-efficient decision-based attack,\" in Proc. IEEE Symp. Secur. Privacy (SP), 2020, pp. 1277-1294, doi: 10.1109/SP40000.2020.00045.",
+        "apa": "Chen, J., Jordan, M. I., & Wainwright, M. J. (2020). HopSkipJumpAttack: A query-efficient decision-based attack. 2020 IEEE Symposium on Security and Privacy (SP), 1277-1294."
+      }
+    },
+    {
+      "id": "nes",
+      "name": "Natural Evolution Strategies Attack (NES)",
+      "family": "blackbox_score",
+      "tier": "S",
+      "threat_model": "black_box_score",
+      "requires_training": false,
+      "compute_cost": "high",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "l1",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": "pgd",
+      "diff_from_parent": "Replaces exact autograd backprop with antithetic Gaussian NES score-function gradient estimates using only forward queries.",
+      "summary_plain": "Estimates gradients from forward-only confidence queries via antithetic Gaussian search directions and runs PGD.",
+      "when_to_use": "Against non-differentiable or gradient-obfuscated models that still return continuous scores or logits.",
+      "when_not_to_use": "When hard decisions only are exposed (use boundary or hopskipjump) or when white-box autograd works.",
+      "extension_hooks": [
+        "Add time/data priors to Gaussian covariance -> Bandits-TD",
+        "Adjust search std `sigma` and `nb_sample` for noisy/stochastic RF channels"
+      ],
+      "module_path": "wannado.adv.attacks.blackbox_score.nes_ilyas2018",
+      "citation": {
+        "key": "ilyas2018black",
+        "title": "Black-box Adversarial Attacks with Limited Queries and Information",
+        "authors": "Andrew Ilyas, Logan Engstrom, Anish Athalye, and Jessy Lin",
+        "venue": "35th International Conference on Machine Learning (ICML)",
+        "year": 2018,
+        "url": "https://arxiv.org/abs/1804.08598",
+        "bibtex": "@inproceedings{ilyas2018black,\n  title={Black-box Adversarial Attacks with Limited Queries and Information},\n  author={Ilyas, Andrew and Engstrom, Logan and Athalye, Anish and Lin, Jessy},\n  booktitle={Proceedings of the 35th International Conference on Machine Learning},\n  pages={2137--2146},\n  year={2018},\n  volume={80},\n  series={Proceedings of Machine Learning Research},\n  publisher={PMLR},\n  url={https://arxiv.org/abs/1804.08598},\n}",
+        "ieee": "A. Ilyas, L. Engstrom, A. Athalye, and J. Lin, \"Black-box adversarial attacks with limited queries and information,\" in Proc. 35th Int. Conf. Mach. Learn. (ICML), PMLR 80, 2018, pp. 2137-2146.",
+        "apa": "Ilyas, A., Engstrom, L., Athalye, A., & Lin, J. (2018). Black-box adversarial attacks with limited queries and information. Proceedings of the 35th International Conference on Machine Learning (ICML), PMLR 80, 2137-2146."
+      }
+    },
+    {
+      "id": "simba",
+      "name": "Simple Black-Box Attack (SimBA)",
+      "family": "blackbox_score",
+      "tier": "S",
+      "threat_model": "black_box_score",
+      "requires_training": false,
+      "compute_cost": "medium",
+      "supported_norms": [
+        "l2",
+        "linf",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl"
+      ],
+      "parent_id": null,
+      "diff_from_parent": "Greedy +/- orthonormal basis probing over confidence scores without finite-difference gradient estimators.",
+      "summary_plain": "Greedy orthonormal-basis black-box attack that flips predictions by testing +/- single directions without estimating gradients.",
+      "when_to_use": "Minimalist query-efficient score-based baseline when simplicity and strict monotonic confidence reduction are desired.",
+      "when_not_to_use": "Under strict hard-label-only access (use boundary or hopskipjump) or when gradients are available (use APGD).",
+      "extension_hooks": [
+        "Substitute Cartesian unit basis with 2D-DCT or 1D-FFT orthonormal frequency basis (SimBA-DCT / SimBA-FFT)",
+        "Combine cosine/phase step scaling for complex wireless sub-carriers"
+      ],
+      "module_path": "wannado.adv.attacks.blackbox_score.simba_guo2019",
+      "citation": {
+        "key": "guo2019simple",
+        "title": "Simple Black-box Adversarial Attacks",
+        "authors": "Chuan Guo, Jacob R. Gardner, Yurong You, Andrew Gordon Wilson, and Kilian Q. Weinberger",
+        "venue": "36th International Conference on Machine Learning (ICML)",
+        "year": 2019,
+        "url": "https://arxiv.org/abs/1905.07121",
+        "bibtex": "@inproceedings{guo2019simple,\n  title={Simple Black-box Adversarial Attacks},\n  author={Guo, Chuan and Gardner, Jacob R. and You, Yurong and Wilson, Andrew Gordon and Weinberger, Kilian Q.},\n  booktitle={Proceedings of the 36th International Conference on Machine Learning},\n  pages={2484--2493},\n  year={2019},\n  volume={97},\n  series={Proceedings of Machine Learning Research},\n  publisher={PMLR},\n  url={https://arxiv.org/abs/1905.07121},\n}",
+        "ieee": "C. Guo, J. R. Gardner, Y. You, A. G. Wilson, and K. Q. Weinberger, \"Simple black-box adversarial attacks,\" in Proc. 36th Int. Conf. Mach. Learn. (ICML), PMLR 97, 2019, pp. 2484-2493.",
+        "apa": "Guo, C., Gardner, J. R., You, Y., Wilson, A. G., & Weinberger, K. Q. (2019). Simple black-box adversarial attacks. Proceedings of the 36th International Conference on Machine Learning (ICML), PMLR 97, 2484-2493."
+      }
+    },
+    {
+      "id": "spsa",
+      "name": "SPSA Black-Box Attack",
+      "family": "blackbox_score",
+      "tier": "A",
+      "threat_model": "black_box_score",
+      "requires_training": false,
+      "compute_cost": "high",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": "pgd",
+      "diff_from_parent": "Replaces exact autograd backprop with Rademacher simultaneous perturbation finite differences fed into projected Adam ascent.",
+      "summary_plain": "Gradient-free score-based attack that estimates ascent directions via random +/- probe pairs and updates with Adam.",
+      "when_to_use": "When models contain non-differentiable blocks (quantization, custom simulators) or to expose gradient masking when scores/logits are observable.",
+      "when_not_to_use": "When only hard decisions are returned (use HopSkipJump), when strict query budgets are tight (use Square Attack), or when full gradients exist (use APGD).",
+      "extension_hooks": [
+        "Swap Rademacher probes for spatial/burst random search -> Square Attack (ECCV 2020)",
+        "Switch from score queries to label-only queries -> HopSkipJump (IEEE S&P 2020)"
+      ],
+      "module_path": "wannado.adv.attacks.blackbox_score.spsa_uesato2018",
+      "citation": {
+        "key": "uesato2018adversarial",
+        "title": "Adversarial Risk and the Dangers of Evaluating Against Weak Attacks",
+        "authors": "Jonathan Uesato, Brendan O'Donoghue, Aaron van den Oord, and Pushmeet Kohli",
+        "venue": "35th International Conference on Machine Learning (ICML)",
+        "year": 2018,
+        "url": "https://proceedings.mlr.press/v80/uesato18a.html",
+        "bibtex": "@inproceedings{uesato2018adversarial,\n  title={Adversarial Risk and the Dangers of Evaluating Against Weak Attacks},\n  author={Uesato, Jonathan and O'Donoghue, Brendan and van den Oord, A{\\\"a}ron and Kohli, Pushmeet},\n  booktitle={Proceedings of the 35th International Conference on Machine Learning},\n  pages={5025--5034},\n  year={2018},\n  volume={80},\n  series={Proceedings of Machine Learning Research},\n  publisher={PMLR},\n  url={https://proceedings.mlr.press/v80/uesato18a.html},\n}",
+        "ieee": "J. Uesato, B. O'Donoghue, A. van den Oord, and P. Kohli, \"Adversarial risk and the dangers of evaluating against weak attacks,\" in Proc. Int. Conf. Mach. Learn. (ICML), PMLR 80, 2018, pp. 5025-5034.",
+        "apa": "Uesato, J., O'Donoghue, B., van den Oord, A., & Kohli, P. (2018). Adversarial risk and the dangers of evaluating against weak attacks. Proceedings of the 35th International Conference on Machine Learning (ICML), PMLR 80, 5025-5034."
+      }
+    },
+    {
+      "id": "square_attack",
+      "name": "Square Attack",
+      "family": "blackbox_score",
+      "tier": "S",
+      "threat_model": "black_box_score",
+      "requires_training": false,
+      "compute_cost": "medium",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": null,
+      "diff_from_parent": "Origin of query-efficient boundary random search: samples shrinking localized square patches (4D) or contiguous windows (1D/ND) without gradient estimation.",
+      "summary_plain": "Gradient-free score-based black-box attack that greedily proposes shrinking localized patches/bursts along the constraint boundary.",
+      "when_to_use": "Strongest general-purpose score-based black-box attack and essential sanity check against white-box gradient masking.",
+      "when_not_to_use": "When only top-1 hard labels are observable without confidence/logit scores (use HopSkipJump).",
+      "extension_hooks": [
+        "Chain with APGD-CE, APGD-DLR, and FAB -> AutoAttack",
+        "Customize patch geometry for frequency-domain or spectrogram bursts"
+      ],
+      "module_path": "wannado.adv.attacks.blackbox_score.square_andriushchenko2020",
+      "citation": {
+        "key": "andriushchenko2020square",
+        "title": "Square Attack: a query-efficient black-box adversarial attack via random search",
+        "authors": "Maksym Andriushchenko, Francesco Croce, Nicolas Flammarion, and Matthias Hein",
+        "venue": "European Conference on Computer Vision (ECCV)",
+        "year": 2020,
+        "url": "https://arxiv.org/abs/1912.00049",
+        "bibtex": "@inproceedings{andriushchenko2020square,\n  title={Square attack: a query-efficient black-box adversarial attack via random search},\n  author={Andriushchenko, Maksym and Croce, Francesco and Flammarion, Nicolas and Hein, Matthias},\n  booktitle={Computer Vision--ECCV 2020: 16th European Conference, Proceedings, Part XXIV},\n  pages={484--501},\n  year={2020},\n  publisher={Springer},\n  url={https://arxiv.org/abs/1912.00049},\n}",
+        "ieee": "M. Andriushchenko, F. Croce, N. Flammarion, and M. Hein, \"Square attack: A query-efficient black-box adversarial attack via random search,\" in Proc. Eur. Conf. Comput. Vis. (ECCV), 2020, pp. 484-501.",
+        "apa": "Andriushchenko, M., Croce, F., Flammarion, N., & Hein, M. (2020). Square attack: A query-efficient black-box adversarial attack via random search. European Conference on Computer Vision (ECCV), 484-501."
+      }
+    },
+    {
+      "id": "zoo",
+      "name": "Zeroth Order Optimization Attack (ZOO-Adam)",
+      "family": "blackbox_score",
+      "tier": "A",
+      "threat_model": "black_box_score",
+      "requires_training": false,
+      "compute_cost": "high",
+      "supported_norms": [
+        "l2",
+        "linf",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl"
+      ],
+      "parent_id": "cw_l2",
+      "diff_from_parent": "Replaces backpropagation in C&W with coordinate-wise symmetric finite differences and Adam updates using only output scores.",
+      "summary_plain": "Score-based black-box version of C&W that estimates gradients coordinate-by-coordinate via finite differences.",
+      "when_to_use": "When evaluating non-differentiable models that expose continuous logits/probabilities without gradient access.",
+      "when_not_to_use": "When query budget is tight on high-dimensional images (prefer square_attack or nes).",
+      "extension_hooks": [
+        "Add importance sampling over coordinate blocks for faster convergence",
+        "Tune penalty constant `const` or finite-difference step `fd_eps` per domain"
+      ],
+      "module_path": "wannado.adv.attacks.blackbox_score.zoo_chen2017",
+      "citation": {
+        "key": "chen2017zoo",
+        "title": "ZOO: Zeroth Order Optimization Based Black-box Attacks to Deep Neural Networks without Training Substitute Models",
+        "authors": "Pin-Yu Chen, Huan Zhang, Yash Sharma, Jinfeng Yi, and Cho-Jui Hsieh",
+        "venue": "10th ACM Workshop on Artificial Intelligence and Security (AISec)",
+        "year": 2017,
+        "url": "https://arxiv.org/abs/1708.03999",
+        "bibtex": "@inproceedings{chen2017zoo,\n  title={ZOO: Zeroth Order Optimization Based Black-box Attacks to Deep Neural Networks without Training Substitute Models},\n  author={Chen, Pin-Yu and Zhang, Huan and Sharma, Yash and Yi, Jinfeng and Hsieh, Cho-Jui},\n  booktitle={Proceedings of the 10th ACM Workshop on Artificial Intelligence and Security (AISec)},\n  pages={15--26},\n  year={2017},\n  url={https://arxiv.org/abs/1708.03999},\n}",
+        "ieee": "P.-Y. Chen, H. Zhang, Y. Sharma, J. Yi, and C.-J. Hsieh, \"ZOO: Zeroth order optimization based black-box attacks to deep neural networks without training substitute models,\" in Proc. 10th ACM Workshop Artif. Intell. Secur. (AISec), 2017, pp. 15-26.",
+        "apa": "Chen, P.-Y., Zhang, H., Sharma, Y., Yi, J., & Hsieh, C.-J. (2017). ZOO: Zeroth order optimization based black-box attacks to deep neural networks without training substitute models. Proceedings of the 10th ACM Workshop on Artificial Intelligence and Security (AISec), 15-26."
+      }
+    },
+    {
+      "id": "autoattack",
+      "name": "AutoAttack Ensemble",
+      "family": "ensemble",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "high",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl"
+      ],
+      "parent_id": "apgd_dlr",
+      "diff_from_parent": "Sequentially chains APGD-CE, APGD-DLR (untargeted + targeted), FAB, and Square Attack on surviving samples for parameter-free worst-case robustness.",
+      "summary_plain": "Sequential ensemble combining APGD-CE, APGD-DLR, FAB, and Square Attack to prevent single-attack blind spots.",
+      "when_to_use": "Final robustness benchmarking of any classifier when reliable worst-case accuracy matters across white-box and black-box regimes.",
+      "when_not_to_use": "For fast inner-loop adversarial training steps or non-classification regression losses (use PGD/Adam-PGD).",
+      "extension_hooks": [
+        "Adjust apgd_steps / fab_steps / square_queries for heavy full-benchmark runs",
+        "Use version='fast' to skip FAB when rapid screening is preferred"
+      ],
+      "module_path": "wannado.adv.attacks.ensemble.autoattack_croce2020",
+      "citation": {
+        "key": "croce2020reliable",
+        "title": "Reliable evaluation of adversarial robustness with an ensemble of diverse parameter-free attacks",
+        "authors": "Francesco Croce and Matthias Hein",
+        "venue": "37th International Conference on Machine Learning (ICML)",
+        "year": 2020,
+        "url": "https://proceedings.mlr.press/v119/croce20b.html",
+        "bibtex": "@inproceedings{croce2020reliable,\n  title={Reliable evaluation of adversarial robustness with an ensemble of diverse parameter-free attacks},\n  author={Croce, Francesco and Hein, Matthias},\n  booktitle={Proceedings of the 37th International Conference on Machine Learning},\n  pages={2206--2216},\n  year={2020},\n  volume={119},\n  series={Proceedings of Machine Learning Research},\n  publisher={PMLR},\n  url={https://proceedings.mlr.press/v119/croce20b.html},\n}",
+        "ieee": "F. Croce and M. Hein, \"Reliable evaluation of adversarial robustness with an ensemble of diverse parameter-free attacks,\" in Proc. Int. Conf. Mach. Learn. (ICML), PMLR 119, 2020, pp. 2206-2216.",
+        "apa": "Croce, F., & Hein, M. (2020). Reliable evaluation of adversarial robustness with an ensemble of diverse parameter-free attacks. Proceedings of the 37th International Conference on Machine Learning (ICML), PMLR 119, 2206-2216."
+      }
+    },
+    {
+      "id": "adam_pgd",
+      "name": "Adam Projected Gradient Descent (Adam-PGD)",
+      "family": "first_order",
+      "tier": "A",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "low",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": "pgd",
+      "diff_from_parent": "Replaces raw sign/unit-L2 PGD updates with bias-corrected Adam first and second moment adaptive steps.",
+      "summary_plain": "Replaces fixed PGD steps with Adam's adaptive learning-rate transmission—especially effective on continuous signals and L2 power budgets.",
+      "when_to_use": "Continuous signals (wireless IQ, audio, sensor waveforms), regression losses, or L2/JSR-dB constraints where vanilla PGD oscillates.",
+      "when_not_to_use": "When comparing strictly against standard Madry PGD or Croce & Hein APGD in CV classification benchmarks.",
+      "extension_hooks": [
+        "Add cosine lr decay across steps",
+        "Combine with EoT random channel sampling for wireless fading robustness"
+      ],
+      "module_path": "wannado.adv.attacks.first_order.adam_pgd",
+      "citation": {
+        "key": "kingma2015adam",
+        "title": "Adam: A Method for Stochastic Optimization (paired with Madry et al. PGD, ICLR 2018)",
+        "authors": "Diederik P. Kingma and Jimmy Ba",
+        "venue": "3rd International Conference on Learning Representations (ICLR)",
+        "year": 2015,
+        "url": "https://arxiv.org/abs/1412.6980",
+        "bibtex": "@inproceedings{kingma2015adam,\n  author={Kingma, Diederik P. and Ba, Jimmy},\n  title={Adam: A Method for Stochastic Optimization},\n  booktitle={International Conference on Learning Representations (ICLR)},\n  year={2015},\n  url={https://arxiv.org/abs/1412.6980},\n}",
+        "ieee": "D. P. Kingma and J. Ba, \"Adam: A method for stochastic optimization,\" in Proc. Int. Conf. Learn. Represent. (ICLR), 2015 (combined with Madry et al., ICLR 2018 PGD projection).",
+        "apa": "Kingma, D. P., & Ba, J. (2015). Adam: A method for stochastic optimization. International Conference on Learning Representations (ICLR)."
+      }
+    },
+    {
+      "id": "apgd_ce",
+      "name": "Auto-PGD Cross-Entropy (APGD-CE)",
+      "family": "first_order",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "medium",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": "pgd",
+      "diff_from_parent": "Adds parameter-free adaptive step-size halving at checkpoints w_j, rollback to best iterate, and momentum blending (alpha=0.75).",
+      "summary_plain": "Parameter-free strongest white-box PGD: automatically halves step sizes and rolls back to the best perturbation when progress stalls.",
+      "when_to_use": "Whenever you want maximum white-box attack strength without manually tuning step_size.",
+      "when_not_to_use": "If your model rescales logits so Softmax saturates to 0/1 (pair with or switch to apgd_dlr).",
+      "extension_hooks": [
+        "Switch loss='dlr' to defeat Softmax gradient saturation -> APGD-DLR",
+        "Add stochastic environment expectations inside objective -> EoT-APGD"
+      ],
+      "module_path": "wannado.adv.attacks.first_order.apgd_ce_croce2020",
+      "citation": {
+        "key": "croce2020reliable",
+        "title": "Reliable evaluation of adversarial robustness with an ensemble of diverse parameter-free attacks",
+        "authors": "Francesco Croce and Matthias Hein",
+        "venue": "37th International Conference on Machine Learning (ICML)",
+        "year": 2020,
+        "url": "https://proceedings.mlr.press/v119/croce20b.html",
+        "bibtex": "@inproceedings{croce2020reliable,\n  title={Reliable evaluation of adversarial robustness with an ensemble of diverse parameter-free attacks},\n  author={Croce, Francesco and Hein, Matthias},\n  booktitle={Proceedings of the 37th International Conference on Machine Learning},\n  pages={2206--2216},\n  year={2020},\n  volume={119},\n  series={Proceedings of Machine Learning Research},\n  publisher={PMLR},\n  url={https://proceedings.mlr.press/v119/croce20b.html},\n}",
+        "ieee": "F. Croce and M. Hein, \"Reliable evaluation of adversarial robustness with an ensemble of diverse parameter-free attacks,\" in Proc. 37th Int. Conf. Mach. Learn. (ICML), PMLR, 2020, pp. 2206-2216.",
+        "apa": "Croce, F., & Hein, M. (2020). Reliable evaluation of adversarial robustness with an ensemble of diverse parameter-free attacks. Proceedings of the 37th International Conference on Machine Learning (ICML), 2206-2216."
+      }
+    },
+    {
+      "id": "apgd_dlr",
+      "name": "Auto-PGD Difference of Logits Ratio (APGD-DLR)",
+      "family": "first_order",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "medium",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl"
+      ],
+      "parent_id": "apgd_ce",
+      "diff_from_parent": "Uses APGD Algorithm 1 with shift- and scale-invariant Difference of Logits Ratio (DLR) loss to eliminate Softmax gradient saturation.",
+      "summary_plain": "Scale-invariant Auto-PGD that defeats Softmax saturation and logit-scaling gradient obfuscation.",
+      "when_to_use": "Alongside APGD-CE on classifiers, especially if CE-based attacks unexpectedly stall with near-zero gradients.",
+      "when_not_to_use": "Non-classification regression/MSE tasks without class logits (use APGD with a custom regression loss instead).",
+      "extension_hooks": [
+        "Ensemble with APGD-CE, FAB, and Square Attack -> AutoAttack",
+        "Add EoT stochastic transforms for random wireless fading channels"
+      ],
+      "module_path": "wannado.adv.attacks.first_order.apgd_dlr_croce2020",
+      "citation": {
+        "key": "croce2020reliable",
+        "title": "Reliable evaluation of adversarial robustness with an ensemble of diverse parameter-free attacks",
+        "authors": "Francesco Croce and Matthias Hein",
+        "venue": "37th International Conference on Machine Learning (ICML)",
+        "year": 2020,
+        "url": "https://proceedings.mlr.press/v119/croce20b.html",
+        "bibtex": "@inproceedings{croce2020reliable,\n  title={Reliable evaluation of adversarial robustness with an ensemble of diverse parameter-free attacks},\n  author={Croce, Francesco and Hein, Matthias},\n  booktitle={Proceedings of the 37th International Conference on Machine Learning},\n  pages={2206--2216},\n  year={2020},\n  volume={119},\n  series={Proceedings of Machine Learning Research},\n  publisher={PMLR},\n  url={https://proceedings.mlr.press/v119/croce20b.html},\n}",
+        "ieee": "F. Croce and M. Hein, \"Reliable evaluation of adversarial robustness with an ensemble of diverse parameter-free attacks,\" in Proc. 37th Int. Conf. Mach. Learn. (ICML), PMLR, 2020, pp. 2206-2216.",
+        "apa": "Croce, F., & Hein, M. (2020). Reliable evaluation of adversarial robustness with an ensemble of diverse parameter-free attacks. Proceedings of the 37th International Conference on Machine Learning (ICML), 2206-2216."
+      }
+    },
+    {
+      "id": "apgd_l1",
+      "name": "L1 Auto-PGD (Mind the Box)",
+      "family": "first_order",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "medium",
+      "supported_norms": [
+        "l1"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": "apgd_ce",
+      "diff_from_parent": "Adapts Auto-PGD to sparse L1 threat models using exact box-intersected L1 projection and sparsity-scheduled steepest coordinate updates.",
+      "summary_plain": "Sparse L1-APGD: computes exact box+L1 projections and top-k steepest coordinate updates with adaptive step-size halving.",
+      "when_to_use": "Whenever evaluating sparse fixed-budget L1 robustness (fewer pixels/bins perturbed strongly rather than dense small noise).",
+      "when_not_to_use": "For dense L2/Linf perturbations or wireless JSR energy budgets (use apgd_ce, apgd_dlr, or sparsefool for unconstrained L0).",
+      "extension_hooks": [
+        "Pass `loss='dlr'` against Softmax-saturated classifiers under L1 budgets",
+        "Customize top-k sparsity annealing schedule inside `_l1_steepest_step`"
+      ],
+      "module_path": "wannado.adv.attacks.first_order.apgd_l1_croce2021",
+      "citation": {
+        "key": "croce2021mind",
+        "title": "Mind the Box: l1-APGD for Sparse Adversarial Attacks on Image Classifiers",
+        "authors": "Francesco Croce and Matthias Hein",
+        "venue": "38th International Conference on Machine Learning (ICML)",
+        "year": 2021,
+        "url": "https://arxiv.org/abs/2103.01208",
+        "bibtex": "@inproceedings{croce2021mind,\n  title={Mind the Box: $l_1$-APGD for Sparse Adversarial Attacks on Image Classifiers},\n  author={Croce, Francesco and Hein, Matthias},\n  booktitle={Proceedings of the 38th International Conference on Machine Learning},\n  pages={2201--2211},\n  year={2021},\n  volume={139},\n  series={Proceedings of Machine Learning Research},\n  publisher={PMLR},\n  url={https://arxiv.org/abs/2103.01208},\n}",
+        "ieee": "F. Croce and M. Hein, \"Mind the box: l1-APGD for sparse adversarial attacks on image classifiers,\" in Proc. 38th Int. Conf. Mach. Learn. (ICML), PMLR 139, 2021, pp. 2201-2211.",
+        "apa": "Croce, F., & Hein, M. (2021). Mind the box: l1-APGD for sparse adversarial attacks on image classifiers. Proceedings of the 38th International Conference on Machine Learning (ICML), PMLR 139, 2201-2211."
+      }
+    },
+    {
+      "id": "bim",
+      "name": "Basic Iterative Method (BIM / I-FGSM)",
+      "family": "first_order",
+      "tier": "A",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "low",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": "fgsm",
+      "diff_from_parent": "Splits FGSM's single full step into multiple smaller iterative ascent steps with per-step projection (deterministic start at x).",
+      "summary_plain": "Deterministic multi-step iterative FGSM without random initialization.",
+      "when_to_use": "When you want a reproducible deterministic iterative baseline or to compare directly against FGSM without random-seed variance.",
+      "when_not_to_use": "When testing models with sharp local gradient masking near x (prefer PGD with random_start=True or APGD).",
+      "extension_hooks": [
+        "Add random start inside the ball -> PGD (Madry 2018)",
+        "Add gradient momentum for black-box transferability -> MI-FGSM (Dong 2018)"
+      ],
+      "module_path": "wannado.adv.attacks.first_order.bim_kurakin2017",
+      "citation": {
+        "key": "kurakin2017adversarial",
+        "title": "Adversarial examples in the physical world",
+        "authors": "Alexey Kurakin, Ian J. Goodfellow, and Samy Bengio",
+        "venue": "International Conference on Learning Representations (ICLR), Workshop Track",
+        "year": 2017,
+        "url": "https://arxiv.org/abs/1607.02533",
+        "bibtex": "@inproceedings{kurakin2017adversarial,\n  title={Adversarial examples in the physical world},\n  author={Alexey Kurakin and Ian J. Goodfellow and Samy Bengio},\n  booktitle={International Conference on Learning Representations (ICLR), Workshop Track},\n  year={2017},\n  url={https://arxiv.org/abs/1607.02533},\n}",
+        "ieee": "A. Kurakin, I. J. Goodfellow, and S. Bengio, \"Adversarial examples in the physical world,\" in Proc. Int. Conf. Learn. Represent. (ICLR) Workshop, 2017.",
+        "apa": "Kurakin, A., Goodfellow, I. J., & Bengio, S. (2017). Adversarial examples in the physical world. International Conference on Learning Representations (ICLR) Workshop."
+      }
+    },
+    {
+      "id": "fgsm",
+      "name": "Fast Gradient Sign Method (FGSM)",
+      "family": "first_order",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "very_low",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": null,
+      "diff_from_parent": "Origin of fast first-order gradient attacks: single-step linear ascent.",
+      "summary_plain": "Takes one full-budget step along the input gradient direction to rapidly probe linear vulnerability.",
+      "when_to_use": "Always run first as a 1-second sanity baseline and speed benchmark.",
+      "when_not_to_use": "Never claim a model is robust solely because it resists FGSM; curved or masked loss surfaces easily fool single-step attacks.",
+      "extension_hooks": [
+        "Add random initialization -> R+FGSM / Fast-FGSM",
+        "Iterate with small steps and projection -> BIM / PGD",
+        "Average gradient across random channel draws -> EoT-FGSM"
+      ],
+      "module_path": "wannado.adv.attacks.first_order.fgsm_goodfellow2015",
+      "citation": {
+        "key": "goodfellow2015explaining",
+        "title": "Explaining and Harnessing Adversarial Examples",
+        "authors": "Ian J. Goodfellow, Jonathon Shlens, and Christian Szegedy",
+        "venue": "3rd International Conference on Learning Representations (ICLR)",
+        "year": 2015,
+        "url": "https://arxiv.org/abs/1412.6572",
+        "bibtex": "@inproceedings{goodfellow2015explaining,\n  title={Explaining and Harnessing Adversarial Examples},\n  author={Ian J. Goodfellow and Jonathon Shlens and Christian Szegedy},\n  booktitle={3rd International Conference on Learning Representations, {ICLR} 2015, San Diego, CA, USA, May 7-9, 2015, Conference Track Proceedings},\n  year={2015},\n  url={https://arxiv.org/abs/1412.6572},\n}",
+        "ieee": "I. J. Goodfellow, J. Shlens, and C. Szegedy, \"Explaining and harnessing adversarial examples,\" in Proc. Int. Conf. Learn. Represent. (ICLR), 2015.",
+        "apa": "Goodfellow, I. J., Shlens, J., & Szegedy, C. (2015). Explaining and harnessing adversarial examples. International Conference on Learning Representations (ICLR)."
+      }
+    },
+    {
+      "id": "mi_fgsm",
+      "name": "Momentum Iterative FGSM (MI-FGSM)",
+      "family": "first_order",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "low",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": "bim",
+      "diff_from_parent": "Accumulates an L1-normalized gradient momentum buffer (decay=1.0) across steps to stabilize update directions and boost transferability.",
+      "summary_plain": "Adds gradient inertia (momentum) across iterations to escape poor local optima and transfer better across unseen models.",
+      "when_to_use": "Primary baseline for transfer-based black-box evaluations (surrogate -> victim) and noisy/non-smooth loss surfaces.",
+      "when_not_to_use": "For pure white-box worst-case evaluation on a single model, APGD or multi-restart PGD is usually stronger.",
+      "extension_hooks": [
+        "Look ahead with Nesterov momentum -> NI-FGSM (Lin et al., ICLR 2020)",
+        "Combine with random input/channel transforms -> DI-FGSM / EoT-MI-FGSM"
+      ],
+      "module_path": "wannado.adv.attacks.first_order.mifgsm_dong2018",
+      "citation": {
+        "key": "dong2018boosting",
+        "title": "Boosting Adversarial Attacks With Momentum",
+        "authors": "Yinpeng Dong, Fangzhou Liao, Tianyu Pang, Hang Su, Jun Zhu, Xiaolin Hu, and Jianguo Li",
+        "venue": "IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)",
+        "year": 2018,
+        "url": "https://arxiv.org/abs/1710.06081",
+        "bibtex": "@inproceedings{dong2018boosting,\n  title={Boosting Adversarial Attacks With Momentum},\n  author={Yinpeng Dong and Fangzhou Liao and Tianyu Pang and Hang Su and Jun Zhu and Xiaolin Hu and Jianguo Li},\n  booktitle={Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)},\n  pages={9185--9193},\n  year={2018},\n  url={https://arxiv.org/abs/1710.06081},\n}",
+        "ieee": "Y. Dong, F. Liao, T. Pang, H. Su, J. Zhu, X. Hu, and J. Li, \"Boosting adversarial attacks with momentum,\" in Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR), 2018, pp. 9185-9193.",
+        "apa": "Dong, Y., Liao, F., Pang, T., Su, H., Zhu, J., Hu, X., & Li, J. (2018). Boosting adversarial attacks with momentum. Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR), 9185-9193."
+      }
+    },
+    {
+      "id": "pgd",
+      "name": "Projected Gradient Descent (PGD)",
+      "family": "first_order",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "low",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": "fgsm",
+      "diff_from_parent": "Replaces FGSM's single step with random initialization inside the ball, iterative small steps, and per-step projection (plus optional restarts).",
+      "summary_plain": "Randomly starts inside the allowed budget and iteratively climbs the loss surface while projecting back inside constraints.",
+      "when_to_use": "Primary white-box evaluation baseline for almost any differentiable model.",
+      "when_not_to_use": "When the model contains non-differentiable steps (use SPSA/Square/HopSkipJump) or suffers from Softmax saturation (switch loss='margin' or use APGD-DLR).",
+      "extension_hooks": [
+        "Accumulate gradient momentum -> MI-FGSM / NI-FGSM",
+        "Use Adam moment estimates instead of sign/L2 step -> Adam-PGD",
+        "Use adaptive step-size halving -> APGD-CE / APGD-DLR",
+        "Monte-Carlo sample random channel/environment transforms per step -> EoT-PGD"
+      ],
+      "module_path": "wannado.adv.attacks.first_order.pgd_madry2018",
+      "citation": {
+        "key": "madry2018towards",
+        "title": "Towards Deep Learning Models Resistant to Adversarial Attacks",
+        "authors": "Aleksander Madry, Aleksandar Makelov, Ludwig Schmidt, Dimitris Tsipras, and Adrian Vladu",
+        "venue": "6th International Conference on Learning Representations (ICLR)",
+        "year": 2018,
+        "url": "https://openreview.net/forum?id=rJzIBfZAb",
+        "bibtex": "@inproceedings{madry2018towards,\n  title={Towards Deep Learning Models Resistant to Adversarial Attacks},\n  author={Aleksander Madry and Aleksandar Makelov and Ludwig Schmidt and Dimitris Tsipras and Adrian Vladu},\n  booktitle={International Conference on Learning Representations (ICLR)},\n  year={2018},\n  url={https://openreview.net/forum?id=rJzIBfZAb},\n}",
+        "ieee": "A. Madry, A. Makelov, L. Schmidt, D. Tsipras, and A. Vladu, \"Towards deep learning models resistant to adversarial attacks,\" in Proc. Int. Conf. Learn. Represent. (ICLR), 2018.",
+        "apa": "Madry, A., Makelov, A., Schmidt, L., Tsipras, D., & Vladu, A. (2018). Towards deep learning models resistant to adversarial attacks. International Conference on Learning Representations (ICLR)."
+      }
+    },
+    {
+      "id": "rfgsm",
+      "name": "Random-Start FGSM (R+FGSM)",
+      "family": "first_order",
+      "tier": "A",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "very_low",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": "fgsm",
+      "diff_from_parent": "Prepends a random step of size alpha (default 0.25 * eps) before computing the single-step FGSM gradient update of size (eps - alpha).",
+      "summary_plain": "Takes a small random hop to escape flat gradients near x, then executes one fast gradient step.",
+      "when_to_use": "Fast check against models showing suspiciously high FGSM robustness (e.g. adversarially trained or locally smoothed models).",
+      "when_not_to_use": "Not a substitute for full multi-step PGD or APGD when certifying strong white-box robustness.",
+      "extension_hooks": [
+        "Continue iterating from the perturbed point -> PGD (Madry 2018)",
+        "Use multiple random draws and pick worst-case -> Multi-restart R+FGSM"
+      ],
+      "module_path": "wannado.adv.attacks.first_order.rfgsm_tramer2018",
+      "citation": {
+        "key": "tramer2018ensemble",
+        "title": "Ensemble Adversarial Training: Attacks and Defenses",
+        "authors": "Florian Tram{\\`e}r, Alexey Kurakin, Nicolas Papernot, Ian Goodfellow, Dan Boneh, and Patrick McDaniel",
+        "venue": "6th International Conference on Learning Representations (ICLR)",
+        "year": 2018,
+        "url": "https://arxiv.org/abs/1705.07204",
+        "bibtex": "@inproceedings{tramer2018ensemble,\n  title={Ensemble Adversarial Training: Attacks and Defenses},\n  author={Florian Tram{\\`e}r and Alexey Kurakin and Nicolas Papernot and Ian Goodfellow and Dan Boneh and Patrick McDaniel},\n  booktitle={International Conference on Learning Representations (ICLR)},\n  year={2018},\n  url={https://arxiv.org/abs/1705.07204},\n}",
+        "ieee": "F. Tramèr, A. Kurakin, N. Papernot, I. Goodfellow, D. Boneh, and P. McDaniel, \"Ensemble adversarial training: Attacks and defenses,\" in Proc. Int. Conf. Learn. Represent. (ICLR), 2018.",
+        "apa": "Tramèr, F., Kurakin, A., Papernot, N., Goodfellow, I., Boneh, D., & McDaniel, P. (2018). Ensemble adversarial training: Attacks and defenses. International Conference on Learning Representations (ICLR)."
+      }
+    },
+    {
+      "id": "tpgd",
+      "name": "TRADES KL-Divergence PGD (TPGD)",
+      "family": "first_order",
+      "tier": "A",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "low",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "l1",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": "pgd",
+      "diff_from_parent": "Replaces supervised Cross-Entropy(y) loss with unsupervised KL(softmax(f(x)) || softmax(f(x_adv))) divergence maximization (TRADES inner adversary).",
+      "summary_plain": "Label-free TRADES adversary that maximizes KL divergence away from the model's clean prediction distribution.",
+      "when_to_use": "When ground-truth labels are unavailable, during TRADES robust training, or to test prediction stability on unlabeled streams.",
+      "when_not_to_use": "For targeted class attacks or Softmax-saturated models where initial clean probabilities are one-hot (use apgd_dlr instead).",
+      "extension_hooks": [
+        "Swap KL(p_clean || p_adv) with symmetric JSD or latent embedding cosine distance",
+        "Plug directly into TRADES outer training loss L_clean + beta * KL"
+      ],
+      "module_path": "wannado.adv.attacks.first_order.tpgd_zhang2019",
+      "citation": {
+        "key": "zhang2019theoretically",
+        "title": "Theoretically Principled Trade-off between Robustness and Accuracy",
+        "authors": "Hongyang Zhang, Yaodong Yu, Jiantao Jiao, Eric P. Xing, Laurent El Ghaoui, and Michael I. Jordan",
+        "venue": "36th International Conference on Machine Learning (ICML)",
+        "year": 2019,
+        "url": "https://arxiv.org/abs/1901.08573",
+        "bibtex": "@inproceedings{zhang2019theoretically,\n  title={Theoretically Principled Trade-off between Robustness and Accuracy},\n  author={Zhang, Hongyang and Yu, Yaodong and Jiao, Jiantao and Xing, Eric P. and El Ghaoui, Laurent and Jordan, Michael I.},\n  booktitle={Proceedings of the 36th International Conference on Machine Learning},\n  pages={7472--7482},\n  year={2019},\n  volume={97},\n  series={Proceedings of Machine Learning Research},\n  publisher={PMLR},\n  url={https://arxiv.org/abs/1901.08573},\n}",
+        "ieee": "H. Zhang et al., \"Theoretically principled trade-off between robustness and accuracy,\" in Proc. 36th Int. Conf. Mach. Learn. (ICML), PMLR 97, 2019, pp. 7472-7482.",
+        "apa": "Zhang, H., Yu, Y., Jiao, J., Xing, E. P., El Ghaoui, L., & Jordan, M. I. (2019). Theoretically principled trade-off between robustness and accuracy. Proceedings of the 36th International Conference on Machine Learning (ICML), PMLR 97, 7472-7482."
+      }
+    },
+    {
+      "id": "advgan",
+      "name": "AdvGAN",
+      "family": "generative",
+      "tier": "A",
+      "threat_model": "generative_train",
+      "requires_training": true,
+      "compute_cost": "very_high",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries"
+      ],
+      "parent_id": "gap",
+      "diff_from_parent": "Jointly trains generator G(x) and realism discriminator D(x + G(x)) with L_adv + lambda_gan * L_GAN + lambda_hinge * L_hinge.",
+      "summary_plain": "Trains a GAN generator and discriminator together so synthesized adversarial perturbations look natural and fool victims in one forward pass.",
+      "when_to_use": "When distribution/spectral realism matters alongside zero-step test-time attack inference.",
+      "when_not_to_use": "When fast one-off white-box evaluation suffices (use apgd_ce or autoattack) or training sample count is tiny.",
+      "extension_hooks": [
+        "Swap `_ShapeAdaptiveDiscriminator` with a multi-scale PatchGAN or RF PSD discriminator",
+        "Train against a distilled surrogate classifier for black-box AdvGAN (Xiao et al. Section 3.3)"
+      ],
+      "module_path": "wannado.adv.attacks.generative.advgan_xiao2018",
+      "citation": {
+        "key": "xiao2018generating",
+        "title": "Generating Adversarial Examples with Adversarial Networks",
+        "authors": "Chaowei Xiao, Bo Li, Jun-Yan Zhu, Warren He, Mingyan Liu, and Dawn Song",
+        "venue": "27th International Joint Conference on Artificial Intelligence (IJCAI)",
+        "year": 2018,
+        "url": "https://arxiv.org/abs/1801.02610",
+        "bibtex": "@inproceedings{xiao2018generating,\n  title={Generating Adversarial Examples with Adversarial Networks},\n  author={Xiao, Chaowei and Li, Bo and Zhu, Jun-Yan and He, Warren and Liu, Mingyan and Song, Dawn},\n  booktitle={Proceedings of the Twenty-Seventh International Joint Conference on Artificial Intelligence (IJCAI-18)},\n  pages={3905--3911},\n  year={2018},\n  doi={10.24963/ijcai.2018/543},\n  url={https://arxiv.org/abs/1801.02610},\n}",
+        "ieee": "C. Xiao, B. Li, J.-Y. Zhu, W. He, M. Liu, and D. Song, \"Generating adversarial examples with adversarial networks,\" in Proc. 27th Int. Joint Conf. Artif. Intell. (IJCAI), 2018, pp. 3905-3911, doi: 10.24963/ijcai.2018/543.",
+        "apa": "Xiao, C., Li, B., Zhu, J.-Y., He, W., Liu, M., & Song, D. (2018). Generating adversarial examples with adversarial networks. Proceedings of the Twenty-Seventh International Joint Conference on Artificial Intelligence (IJCAI), 3905-3911."
+      }
+    },
+    {
+      "id": "gap",
+      "name": "Generative Adversarial Perturbations (GAP)",
+      "family": "generative",
+      "tier": "A",
+      "threat_model": "generative_train",
+      "requires_training": true,
+      "compute_cost": "very_high",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": "uap",
+      "diff_from_parent": "Trains a neural generator G(x) or G(z) to emit norm-bounded perturbations in one feed-forward pass instead of iterative per-sample loops.",
+      "summary_plain": "Trains a neural network generator to craft universal or input-dependent perturbations in a single inference forward pass.",
+      "when_to_use": "When evaluating real-time/streaming vulnerability (amortized zero-step inference) or studying generative perturbation synthesis.",
+      "when_not_to_use": "For fast single-batch evaluation or small sample counts without training overhead (use apgd_ce or uap).",
+      "extension_hooks": [
+        "Pass a custom `generator` nn.Module (U-Net / Conv1D / Transformer)",
+        "Combine with a discriminator network for distribution realism -> AdvGAN"
+      ],
+      "module_path": "wannado.adv.attacks.generative.gap_poursaeed2018",
+      "citation": {
+        "key": "poursaeed2018generative",
+        "title": "Generative Adversarial Perturbations",
+        "authors": "Omid Poursaeed, Isay Katsman, Bicheng Gao, and Serge Belongie",
+        "venue": "IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)",
+        "year": 2018,
+        "url": "https://arxiv.org/abs/1712.02328",
+        "bibtex": "@inproceedings{poursaeed2018generative,\n  title={Generative Adversarial Perturbations},\n  author={Poursaeed, Omid and Katsman, Isay and Gao, Bicheng and Belongie, Serge},\n  booktitle={Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)},\n  pages={4422--4431},\n  year={2018},\n  url={https://arxiv.org/abs/1712.02328},\n}",
+        "ieee": "O. Poursaeed, I. Katsman, B. Gao, and S. Belongie, \"Generative adversarial perturbations,\" in Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR), 2018, pp. 4422-4431.",
+        "apa": "Poursaeed, O., Katsman, I., Gao, B., & Belongie, S. (2018). Generative adversarial perturbations. Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR), 4422-4431."
+      }
+    },
+    {
+      "id": "cw_l2",
+      "name": "Carlini & Wagner L2 Attack (C&W L2)",
+      "family": "minimum_norm",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "high",
+      "supported_norms": [
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl"
+      ],
+      "parent_id": null,
+      "diff_from_parent": "Lagrangian L2 + margin-hinge optimization with outer binary search over penalty constant c.",
+      "summary_plain": "Finds near-minimal L2/energy perturbations via Adam optimization over a smooth logit-margin objective and binary search.",
+      "when_to_use": "When measuring minimum jamming energy/distortion needed to break a classifier, or auditing defenses against gradient-based optimization.",
+      "when_not_to_use": "When you need sub-second evaluation on huge datasets (use PGD/APGD/DeepFool first) or Linf-only threat models (use APGD/FAB).",
+      "extension_hooks": [
+        "Add wireless spectral leakage or PAPR penalty terms directly to the objective",
+        "Add L1 regularization for sparse minimum perturbations -> EAD (Chen et al., AAAI 2018)"
+      ],
+      "module_path": "wannado.adv.attacks.minimum_norm.cw_l2_carlini2017",
+      "citation": {
+        "key": "carlini2017towards",
+        "title": "Towards Evaluating the Robustness of Neural Networks",
+        "authors": "Nicholas Carlini and David Wagner",
+        "venue": "2017 IEEE Symposium on Security and Privacy (SP)",
+        "year": 2017,
+        "url": "https://arxiv.org/abs/1608.04644",
+        "bibtex": "@inproceedings{carlini2017towards,\n  title={Towards Evaluating the Robustness of Neural Networks},\n  author={Carlini, Nicholas and Wagner, David},\n  booktitle={2017 IEEE Symposium on Security and Privacy (SP)},\n  pages={39--57},\n  year={2017},\n  organization={IEEE},\n  doi={10.1109/SP.2017.49},\n  url={https://arxiv.org/abs/1608.04644},\n}",
+        "ieee": "N. Carlini and D. Wagner, \"Towards evaluating the robustness of neural networks,\" in Proc. IEEE Symp. Secur. Privacy (SP), 2017, pp. 39-57.",
+        "apa": "Carlini, N., & Wagner, D. (2017). Towards evaluating the robustness of neural networks. 2017 IEEE Symposium on Security and Privacy (SP), 39-57."
+      }
+    },
+    {
+      "id": "deepfool",
+      "name": "DeepFool",
+      "family": "minimum_norm",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "medium",
+      "supported_norms": [
+        "l2",
+        "linf",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl"
+      ],
+      "parent_id": null,
+      "diff_from_parent": "Origin of geometric minimum-norm boundary attacks: iteratively projects onto the nearest linearized class hyperplane until misclassification.",
+      "summary_plain": "Finds a minimal perturbation to cross the nearest decision boundary via iterative hyperplane projection.",
+      "when_to_use": "When measuring the minimum distortion/power margin needed to flip predictions rather than testing a fixed epsilon.",
+      "when_not_to_use": "For non-classification regression losses (needs class logits) or high-class-count outputs without max_classes capping (use C&W or FAB).",
+      "extension_hooks": [
+        "Add biased boundary tracking & restarts -> FAB (Croce & Hein, ICML 2020)",
+        "Aggregate per-sample minimal vectors -> UAP (Moosavi-Dezfooli et al., CVPR 2017)"
+      ],
+      "module_path": "wannado.adv.attacks.minimum_norm.deepfool_moosavi2016",
+      "citation": {
+        "key": "moosavidezfooli2016deepfool",
+        "title": "DeepFool: A Simple and Accurate Method to Fool Deep Neural Networks",
+        "authors": "Seyed-Mohsen Moosavi-Dezfooli, Alhussein Fawzi, and Pascal Frossard",
+        "venue": "IEEE Conference on Computer Vision and Pattern Recognition (CVPR)",
+        "year": 2016,
+        "url": "https://arxiv.org/abs/1511.04599",
+        "bibtex": "@inproceedings{moosavidezfooli2016deepfool,\n  title={DeepFool: A Simple and Accurate Method to Fool Deep Neural Networks},\n  author={Moosavi-Dezfooli, Seyed-Mohsen and Fawzi, Alhussein and Frossard, Pascal},\n  booktitle={Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)},\n  pages={2574--2582},\n  year={2016},\n  url={https://arxiv.org/abs/1511.04599},\n}",
+        "ieee": "S.-M. Moosavi-Dezfooli, A. Fawzi, and P. Frossard, \"DeepFool: A simple and accurate method to fool deep neural networks,\" in Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR), 2016, pp. 2574-2582.",
+        "apa": "Moosavi-Dezfooli, S.-M., Fawzi, A., & Frossard, P. (2016). DeepFool: A simple and accurate method to fool deep neural networks. Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR), 2574-2582."
+      }
+    },
+    {
+      "id": "ead",
+      "name": "Elastic-Net Attack (EAD)",
+      "family": "minimum_norm",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "high",
+      "supported_norms": [
+        "l1",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl"
+      ],
+      "parent_id": "cw_l2",
+      "diff_from_parent": "Generalizes C&W L2 by adding an L1 regularization term beta * ||delta||_1 solved via FISTA soft-thresholding shrinkage.",
+      "summary_plain": "Optimizes Elastic-Net (L1 + L2) + C&W margin via FISTA shrinkage to craft sparse, transferable minimum-distortion attacks.",
+      "when_to_use": "When measuring minimum L1 or Elastic-Net distortion margins, or generating sparse perturbations that generalize well.",
+      "when_not_to_use": "When fast fixed-budget evaluation suffices (use apgd_l1 or apgd_ce) or on non-differentiable models.",
+      "extension_hooks": [
+        "Swap `decision_rule` between `'EN'` (Elastic-Net) and `'L1'` (strictest L1 minimum)",
+        "Add group-lasso structured shrinkage for patch or frequency-band sparsity"
+      ],
+      "module_path": "wannado.adv.attacks.minimum_norm.ead_chen2018",
+      "citation": {
+        "key": "chen2018ead",
+        "title": "EAD: Elastic-Net Attacks to Deep Neural Networks via Adversarial Examples",
+        "authors": "Pin-Yu Chen, Yash Sharma, Huan Zhang, Jinfeng Yi, and Cho-Jui Hsieh",
+        "venue": "32nd AAAI Conference on Artificial Intelligence (AAAI)",
+        "year": 2018,
+        "url": "https://arxiv.org/abs/1709.04114",
+        "bibtex": "@inproceedings{chen2018ead,\n  title={EAD: Elastic-Net Attacks to Deep Neural Networks via Adversarial Examples},\n  author={Chen, Pin-Yu and Sharma, Yash and Zhang, Huan and Yi, Jinfeng and Hsieh, Cho-Jui},\n  booktitle={Proceedings of the 32nd AAAI Conference on Artificial Intelligence (AAAI)},\n  pages={10--17},\n  year={2018},\n  url={https://arxiv.org/abs/1709.04114},\n}",
+        "ieee": "P.-Y. Chen, Y. Sharma, H. Zhang, J. Yi, and C.-J. Hsieh, \"EAD: Elastic-net attacks to deep neural networks via adversarial examples,\" in Proc. AAAI Conf. Artif. Intell., 2018, pp. 10-17.",
+        "apa": "Chen, P.-Y., Sharma, Y., Zhang, H., Yi, J., & Hsieh, C.-J. (2018). EAD: Elastic-net attacks to deep neural networks via adversarial examples. Proceedings of the AAAI Conference on Artificial Intelligence (AAAI), 10-17."
+      }
+    },
+    {
+      "id": "fab",
+      "name": "Fast Adaptive Boundary Attack (FAB)",
+      "family": "minimum_norm",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "medium",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl"
+      ],
+      "parent_id": "deepfool",
+      "diff_from_parent": "Improves DeepFool with biased forward projections toward x_clean (alpha_max), a backward contraction step (beta=0.9), and scaled restarts.",
+      "summary_plain": "Geometric boundary SOTA that tracks the decision boundary while contracting back toward x_clean for minimal L2/Linf distortion.",
+      "when_to_use": "When measuring exact minimal Linf/L2 robustness margins or building an AutoAttack-grade evaluation suite.",
+      "when_not_to_use": "For non-classification regression tasks without logits (use PGD/Adam-PGD with custom loss).",
+      "extension_hooks": [
+        "Combine with APGD-CE, APGD-DLR, and Square Attack -> AutoAttack",
+        "Run targeted FAB over top-K runner-up classes on many-class tasks"
+      ],
+      "module_path": "wannado.adv.attacks.minimum_norm.fab_croce2020",
+      "citation": {
+        "key": "croce2020minimally",
+        "title": "Minimally distorted Adversarial Examples with a Fast Adaptive Boundary Attack",
+        "authors": "Francesco Croce and Matthias Hein",
+        "venue": "37th International Conference on Machine Learning (ICML)",
+        "year": 2020,
+        "url": "https://proceedings.mlr.press/v119/croce20a.html",
+        "bibtex": "@inproceedings{croce2020minimally,\n  title={Minimally distorted Adversarial Examples with a Fast Adaptive Boundary Attack},\n  author={Croce, Francesco and Hein, Matthias},\n  booktitle={Proceedings of the 37th International Conference on Machine Learning},\n  pages={2196--2205},\n  year={2020},\n  volume={119},\n  series={Proceedings of Machine Learning Research},\n  publisher={PMLR},\n  url={https://proceedings.mlr.press/v119/croce20a.html},\n}",
+        "ieee": "F. Croce and M. Hein, \"Minimally distorted adversarial examples with a fast adaptive boundary attack,\" in Proc. 37th Int. Conf. Mach. Learn. (ICML), PMLR, 2020, pp. 2196-2205.",
+        "apa": "Croce, F., & Hein, M. (2020). Minimally distorted adversarial examples with a fast adaptive boundary attack. Proceedings of the 37th International Conference on Machine Learning (ICML), 2196-2205."
+      }
+    },
+    {
+      "id": "jsma",
+      "name": "Jacobian Saliency Map Attack (JSMA)",
+      "family": "minimum_norm",
+      "tier": "A",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "high",
+      "supported_norms": [
+        "l0",
+        "l1",
+        "l2",
+        "linf"
+      ],
+      "supported_domains": [
+        "vision",
+        "tabular",
+        "timeseries",
+        "drl"
+      ],
+      "parent_id": null,
+      "diff_from_parent": "Computes forward-derivative saliency S(x_i, t) combining target-logit sensitivity alpha_i and competing-logit sensitivity beta_i to perturb minimal feature counts.",
+      "summary_plain": "Greedy Jacobian saliency L0 attack that alters only the top few highest-leverage input features toward a target class.",
+      "when_to_use": "Low-to-medium dimensional tabular/sensor/image models when interpretable minimal feature-count (L0) tampering is studied.",
+      "when_not_to_use": "High-resolution ImageNet tensors (O(C * iter) Jacobians are slow; use sparsefool or apgd_l1) or complex-valued waveforms.",
+      "extension_hooks": [
+        "Swap single-feature saliency lookup with pair-wise search for ultra-tight L0",
+        "Supply domain feature-modifiability masks (e.g. immutable tabular columns)"
+      ],
+      "module_path": "wannado.adv.attacks.minimum_norm.jsma_papernot2016",
+      "citation": {
+        "key": "papernot2016limitations",
+        "title": "The Limitations of Deep Learning in Adversarial Settings",
+        "authors": "Nicolas Papernot, Patrick McDaniel, Somesh Jha, Matt Fredrikson, Z. Berkay Celik, and Ananthram Swami",
+        "venue": "2016 IEEE European Symposium on Security and Privacy (EuroS&P)",
+        "year": 2016,
+        "url": "https://arxiv.org/abs/1511.07528",
+        "bibtex": "@inproceedings{papernot2016limitations,\n  title={The Limitations of Deep Learning in Adversarial Settings},\n  author={Papernot, Nicolas and McDaniel, Patrick and Jha, Somesh and Fredrikson, Matt and Celik, Z. Berkay and Swami, Ananthram},\n  booktitle={2016 IEEE European Symposium on Security and Privacy (EuroS&P)},\n  pages={372--387},\n  year={2016},\n  organization={IEEE},\n  url={https://arxiv.org/abs/1511.07528},\n}",
+        "ieee": "N. Papernot et al., \"The limitations of deep learning in adversarial settings,\" in Proc. IEEE Eur. Symp. Secur. Privacy (EuroS&P), 2016, pp. 372-387.",
+        "apa": "Papernot, N., McDaniel, P., Jha, S., Fredrikson, M., Celik, Z. B., & Swami, A. (2016). The limitations of deep learning in adversarial settings. 2016 IEEE European Symposium on Security and Privacy (EuroS&P), 372-387."
+      }
+    },
+    {
+      "id": "sparsefool",
+      "name": "SparseFool",
+      "family": "minimum_norm",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "medium",
+      "supported_norms": [
+        "l0",
+        "l1",
+        "l2",
+        "linf",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl"
+      ],
+      "parent_id": "deepfool",
+      "diff_from_parent": "Linearizes the DeepFool decision boundary and solves coordinate-wise greedy projection inside bounds to minimize L0 sparsity.",
+      "summary_plain": "Geometry-driven L0 sparse attack that flips predictions while perturbing as few pixels, features, or frequency bins as possible.",
+      "when_to_use": "When measuring L0 sparsity resilience (how few pixels or IQ tones need to be jammed to fool a model).",
+      "when_not_to_use": "When optimizing dense small L2/Linf perturbations or without white-box gradients (use DeepFool, APGD, or Square Attack).",
+      "extension_hooks": [
+        "Adjust `lambda_` (>1 for sparser L0, ~1 for smaller amplitude per feature)",
+        "Group coordinates (e.g., RGB patches or OFDM sub-bands) inside `_linear_solver`"
+      ],
+      "module_path": "wannado.adv.attacks.minimum_norm.sparsefool_modas2019",
+      "citation": {
+        "key": "modas2019sparsefool",
+        "title": "SparseFool: A Few Pixels Make a Big Difference",
+        "authors": "Apostolos Modas, Seyed-Mohsen Moosavi-Dezfooli, and Pascal Frossard",
+        "venue": "IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)",
+        "year": 2019,
+        "url": "https://arxiv.org/abs/1811.02248",
+        "bibtex": "@inproceedings{modas2019sparsefool,\n  title={SparseFool: A Few Pixels Make a Big Difference},\n  author={Modas, Apostolos and Moosavi-Dezfooli, Seyed-Mohsen and Frossard, Pascal},\n  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},\n  pages={9087--9096},\n  year={2019},\n  url={https://arxiv.org/abs/1811.02248},\n}",
+        "ieee": "A. Modas, S.-M. Moosavi-Dezfooli, and P. Frossard, \"SparseFool: A few pixels make a big difference,\" in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR), 2019, pp. 9087-9096.",
+        "apa": "Modas, A., Moosavi-Dezfooli, S.-M., & Frossard, P. (2019). SparseFool: A few pixels make a big difference. Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 9087-9096."
+      }
+    },
+    {
+      "id": "adv_patch",
+      "name": "Adversarial Patch",
+      "family": "physical_and_eot",
+      "tier": "A",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "medium",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "timeseries",
+        "tabular"
+      ],
+      "parent_id": "eot_pgd",
+      "diff_from_parent": "Confines perturbations strictly inside a localized binary mask / contiguous patch region, learning universal or per-sample patch patterns under optional random placement.",
+      "summary_plain": "Learns a localized patch or burst pattern (masked to a sub-region) that hijacks predictions when stamped onto inputs.",
+      "when_to_use": "Physical sticker/patch threats in vision, occlusion/patch-dropout defense audits, or time/frequency-burst jamming in wireless signals.",
+      "when_not_to_use": "Imperceptible full-frame norm-ball evaluation (use apgd_ce/autoattack) or black-box hard-label access.",
+      "extension_hooks": [
+        "Pass an explicit custom `mask` matching your physical sticker shape or RF burst window",
+        "Enable `random_location=True` to optimize shift-robust universal physical patches"
+      ],
+      "module_path": "wannado.adv.attacks.physical_and_eot.patch_brown2017",
+      "citation": {
+        "key": "brown2017adversarial",
+        "title": "Adversarial Patch",
+        "authors": "Tom B. Brown, Dandelion Mané, Aurko Roy, Martín Abadi, and Justin Gilmer",
+        "venue": "NIPS 2017 Workshop on Machine Learning and Computer Security",
+        "year": 2017,
+        "url": "https://arxiv.org/abs/1712.09665",
+        "bibtex": "@inproceedings{brown2017adversarial,\n  title={Adversarial Patch},\n  author={Brown, Tom B. and Man{\\'e}, Dandelion and Roy, Aurko and Abadi, Mart{\\'i}n and Gilmer, Justin},\n  booktitle={NIPS 2017 Workshop on Machine Learning and Computer Security},\n  year={2017},\n  url={https://arxiv.org/abs/1712.09665},\n}",
+        "ieee": "T. B. Brown, D. Mané, A. Roy, M. Abadi, and J. Gilmer, \"Adversarial patch,\" in NIPS Workshop Mach. Learn. Comput. Secur., 2017.",
+        "apa": "Brown, T. B., Mané, D., Roy, A., Abadi, M., & Gilmer, J. (2017). Adversarial patch. NIPS Workshop on Machine Learning and Computer Security."
+      }
+    },
+    {
+      "id": "bpda_eot",
+      "name": "BPDA + EoT PGD",
+      "family": "physical_and_eot",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "medium",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "l1",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": "eot_pgd",
+      "diff_from_parent": "Wraps non-differentiable preprocessing defenses in a custom autograd Function (straight-through or smooth surrogate backward pass) combined with EoT sampling.",
+      "summary_plain": "Circumvents shattered, quantized, or non-differentiable preprocessing defenses via Backward Pass Differentiable Approximation + EoT.",
+      "when_to_use": "When a differentiable base classifier sits behind a non-differentiable or stochastic preprocessor (quantizer, bit-depth reduction, ADC truncation, JPEG).",
+      "when_not_to_use": "When the entire victim model weights and architecture are completely hidden black-box (use square_attack or nes).",
+      "extension_hooks": [
+        "Supply explicit differentiable `surrogate_fn` instead of straight-through identity",
+        "Simulate RF ADC quantization + Rayleigh fading inside `defense_fn`"
+      ],
+      "module_path": "wannado.adv.attacks.physical_and_eot.bpda_eot_athalye2018",
+      "citation": {
+        "key": "athalye2018obfuscated",
+        "title": "Obfuscated Gradients Give a False Sense of Security: Circumventing Defenses to Adversarial Examples",
+        "authors": "Anish Athalye, Nicholas Carlini, and David Wagner",
+        "venue": "35th International Conference on Machine Learning (ICML)",
+        "year": 2018,
+        "url": "https://arxiv.org/abs/1802.00420",
+        "bibtex": "@inproceedings{athalye2018obfuscated,\n  title={Obfuscated Gradients Give a False Sense of Security: Circumventing Defenses to Adversarial Examples},\n  author={Athalye, Anish and Carlini, Nicholas and Wagner, David},\n  booktitle={Proceedings of the 35th International Conference on Machine Learning},\n  pages={274--283},\n  year={2018},\n  volume={80},\n  series={Proceedings of Machine Learning Research},\n  publisher={PMLR},\n  url={https://arxiv.org/abs/1802.00420},\n}",
+        "ieee": "A. Athalye, N. Carlini, and D. Wagner, \"Obfuscated gradients give a false sense of security: Circumventing defenses to adversarial examples,\" in Proc. 35th Int. Conf. Mach. Learn. (ICML), PMLR 80, 2018, pp. 274-283.",
+        "apa": "Athalye, A., Carlini, N., & Wagner, D. (2018). Obfuscated gradients give a false sense of security: Circumventing defenses to adversarial examples. Proceedings of the 35th International Conference on Machine Learning (ICML), PMLR 80, 274-283."
+      }
+    },
+    {
+      "id": "eot_pgd",
+      "name": "Expectation Over Transformation PGD (EoT-PGD)",
+      "family": "physical_and_eot",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "medium",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": "pgd",
+      "diff_from_parent": "Monte-Carlo averages autograd gradients and objective checks across K independent draws of a stochastic transform or stochastic victim model.",
+      "summary_plain": "PGD averaged across random physical, preprocessing, or wireless-channel transforms so perturbations survive stochastic noise.",
+      "when_to_use": "When attacking randomized defenses, noisy physical sensors, or stochastic wireless fading/AWGN channels.",
+      "when_not_to_use": "On purely deterministic static models where K=1 standard PGD or APGD is K times faster.",
+      "extension_hooks": [
+        "Plug in Rayleigh fading + AWGN + phase offset wireless channel as transform",
+        "Combine EoT gradient averaging with APGD adaptive step-size halving"
+      ],
+      "module_path": "wannado.adv.attacks.physical_and_eot.eot_pgd_athalye2018",
+      "citation": {
+        "key": "athalye2018synthesizing",
+        "title": "Synthesizing Robust Adversarial Examples",
+        "authors": "Anish Athalye, Logan Engstrom, Andrew Ilyas, and Kevin Kwok",
+        "venue": "35th International Conference on Machine Learning (ICML)",
+        "year": 2018,
+        "url": "https://arxiv.org/abs/1707.07397",
+        "bibtex": "@inproceedings{athalye2018synthesizing,\n  title={Synthesizing Robust Adversarial Examples},\n  author={Athalye, Anish and Engstrom, Logan and Ilyas, Andrew and Kwok, Kevin},\n  booktitle={Proceedings of the 35th International Conference on Machine Learning},\n  pages={284--293},\n  year={2018},\n  volume={80},\n  series={Proceedings of Machine Learning Research},\n  publisher={PMLR},\n  url={https://arxiv.org/abs/1707.07397},\n}",
+        "ieee": "A. Athalye, L. Engstrom, A. Ilyas, and K. Kwok, \"Synthesizing robust adversarial examples,\" in Proc. Int. Conf. Mach. Learn. (ICML), PMLR 80, 2018, pp. 284-293.",
+        "apa": "Athalye, A., Engstrom, L., Ilyas, A., & Kwok, K. (2018). Synthesizing robust adversarial examples. Proceedings of the 35th International Conference on Machine Learning (ICML), PMLR 80, 284-293."
+      }
+    },
+    {
+      "id": "di_fgsm",
+      "name": "Diverse Inputs Iterative FGSM (DI-FGSM)",
+      "family": "transferability",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "low",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "timeseries",
+        "wireless"
+      ],
+      "parent_id": "mi_fgsm",
+      "diff_from_parent": "Applies stochastic differentiable resize + zero-pad input diversity T(x; p) prior to each surrogate forward/backward step.",
+      "summary_plain": "Randomly resizes and zero-pads inputs with probability p each step so perturbations do not overfit surrogate spatial grids.",
+      "when_to_use": "Cross-architecture transfer attacks on CNNs/ViTs (4D images) or temporal/IQ sequence classifiers (3D) and custom diversity hooks.",
+      "when_not_to_use": "Purely tabular/unordered vector inputs without a meaningful spatial/temporal neighborhood or custom diversity_transform (use mi_fgsm or vmi_fgsm).",
+      "extension_hooks": [
+        "Pass custom differentiable `diversity_transform` for 2D/wireless sample-rate or time-warping diversity",
+        "Compose with TI-FGSM gradient smoothing kernel for defended CV targets"
+      ],
+      "module_path": "wannado.adv.attacks.transferability.difgsm_xie2019",
+      "citation": {
+        "key": "xie2019improving",
+        "title": "Improving Transferability of Adversarial Examples With Input Diversity",
+        "authors": "Cihang Xie, Zhishuai Zhang, Yuyin Zhou, Song Bai, Jianyu Wang, Zhou Ren, and Alan L. Yuille",
+        "venue": "IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)",
+        "year": 2019,
+        "url": "https://arxiv.org/abs/1803.06978",
+        "bibtex": "@inproceedings{xie2019improving,\n  title={Improving Transferability of Adversarial Examples With Input Diversity},\n  author={Xie, Cihang and Zhang, Zhishuai and Zhou, Yuyin and Bai, Song and Wang, Jianyu and Ren, Zhou and Yuille, Alan L.},\n  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},\n  pages={2730--2739},\n  year={2019},\n  url={https://arxiv.org/abs/1803.06978},\n}",
+        "ieee": "C. Xie et al., \"Improving transferability of adversarial examples with input diversity,\" in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR), 2019, pp. 2730-2739.",
+        "apa": "Xie, C., Zhang, Z., Zhou, Y., Bai, S., Wang, J., Ren, Z., & Yuille, A. L. (2019). Improving transferability of adversarial examples with input diversity. Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 2730-2739."
+      }
+    },
+    {
+      "id": "ni_fgsm",
+      "name": "Nesterov Iterative FGSM (NI-FGSM)",
+      "family": "transferability",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "low",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": "mi_fgsm",
+      "diff_from_parent": "Applies Nesterov look-ahead (x + alpha * decay * momentum) before evaluating the L1-normalized gradient.",
+      "summary_plain": "Upgrades MI-FGSM with Nesterov look-ahead momentum so updates anticipate curvature and transfer better across unknown models.",
+      "when_to_use": "Strong default baseline for surrogate-to-victim transfer attacks across classification, regression, or wireless IQ models.",
+      "when_not_to_use": "Against randomized or non-differentiable defenses without EoT/BPDA, or for minimum-norm boundary distance measurement.",
+      "extension_hooks": [
+        "Average look-ahead gradients over scaled input copies -> SI-NI-FGSM",
+        "Add input diversity or translation-invariant kernel -> DI-NI-FGSM / TI-NI-FGSM",
+        "Substitute ensemble surrogate forward pass inside look-ahead step"
+      ],
+      "module_path": "wannado.adv.attacks.transferability.nifgsm_lin2020",
+      "citation": {
+        "key": "lin2020nesterov",
+        "title": "Nesterov Accelerated Gradient and Scale Invariance for Adversarial Attacks",
+        "authors": "Jiadong Lin, Chuanbiao Song, Kun He, Liwei Wang, and John E. Hopcroft",
+        "venue": "8th International Conference on Learning Representations (ICLR)",
+        "year": 2020,
+        "url": "https://arxiv.org/abs/1908.06281",
+        "bibtex": "@inproceedings{lin2020nesterov,\n  title={Nesterov Accelerated Gradient and Scale Invariance for Adversarial Attacks},\n  author={Lin, Jiadong and Song, Chuanbiao and He, Kun and Wang, Liwei and Hopcroft, John E.},\n  booktitle={International Conference on Learning Representations (ICLR)},\n  year={2020},\n  url={https://arxiv.org/abs/1908.06281},\n}",
+        "ieee": "J. Lin, C. Song, K. He, L. Wang, and J. E. Hopcroft, \"Nesterov accelerated gradient and scale invariance for adversarial attacks,\" in Proc. Int. Conf. Learn. Represent. (ICLR), 2020.",
+        "apa": "Lin, J., Song, C., He, K., Wang, L., & Hopcroft, J. E. (2020). Nesterov accelerated gradient and scale invariance for adversarial attacks. International Conference on Learning Representations (ICLR)."
+      }
+    },
+    {
+      "id": "sini_fgsm",
+      "name": "Scale-Invariant Nesterov Iterative FGSM (SI-NI-FGSM)",
+      "family": "transferability",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "medium",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": "ni_fgsm",
+      "diff_from_parent": "Averages Nesterov look-ahead gradients across m dyadic input amplitude scales x_nes / 2^i (Lin et al., ICLR 2020).",
+      "summary_plain": "Combines Nesterov look-ahead momentum with multi-scale gradient averaging (x / 2^i) to prevent surrogate overfitting.",
+      "when_to_use": "When transferring attacks across architectures or gain/amplitude regimes (images or linear wireless receivers).",
+      "when_not_to_use": "Against scale-sensitive preprocessing where amplitude halving collapses clean accuracy (set scale_copies smaller or use ni_fgsm/vmi_fgsm).",
+      "extension_hooks": [
+        "Swap dyadic scaling `x / 2^i` with Admix image mixing or wireless SNR gain sweeps",
+        "Compose with DI spatial diversity or TI gradient smoothing kernel"
+      ],
+      "module_path": "wannado.adv.attacks.transferability.sinifgsm_lin2020",
+      "citation": {
+        "key": "lin2020nesterov",
+        "title": "Nesterov Accelerated Gradient and Scale Invariance for Adversarial Attacks",
+        "authors": "Jiadong Lin, Chuanbiao Song, Kun He, Liwei Wang, and John E. Hopcroft",
+        "venue": "8th International Conference on Learning Representations (ICLR)",
+        "year": 2020,
+        "url": "https://arxiv.org/abs/1908.06281",
+        "bibtex": "@inproceedings{lin2020nesterov,\n  title={Nesterov Accelerated Gradient and Scale Invariance for Adversarial Attacks},\n  author={Lin, Jiadong and Song, Chuanbiao and He, Kun and Wang, Liwei and Hopcroft, John E.},\n  booktitle={International Conference on Learning Representations (ICLR)},\n  year={2020},\n  url={https://arxiv.org/abs/1908.06281},\n}",
+        "ieee": "J. Lin, C. Song, K. He, L. Wang, and J. E. Hopcroft, \"Nesterov accelerated gradient and scale invariance for adversarial attacks,\" in Proc. Int. Conf. Learn. Represent. (ICLR), 2020.",
+        "apa": "Lin, J., Song, C., He, K., Wang, L., & Hopcroft, J. E. (2020). Nesterov accelerated gradient and scale invariance for adversarial attacks. International Conference on Learning Representations (ICLR)."
+      }
+    },
+    {
+      "id": "ti_fgsm",
+      "name": "Translation-Invariant FGSM (TI-FGSM)",
+      "family": "transferability",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "low",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "timeseries",
+        "wireless"
+      ],
+      "parent_id": "mi_fgsm",
+      "diff_from_parent": "Convolves surrogate gradients with a symmetric 2D/1D smoothing kernel W (Gaussian/linear/uniform) to approximate translation-ensemble optimization.",
+      "summary_plain": "Convolves gradients with a Gaussian/smoothing kernel so perturbations are translation-invariant and evade defended victims.",
+      "when_to_use": "When transferring adversarial attacks onto adversarially trained models, CNN/ViT image models, or shift-sensitive 1D IQ/waveform models.",
+      "when_not_to_use": "On unordered tabular feature vectors where neighboring coordinates have no spatial or temporal adjacency.",
+      "extension_hooks": [
+        "Swap smoothing kernel for a domain-specific bandpass/RRC filter in wireless RF jamming",
+        "Compose with DI-FGSM diversity and NI-FGSM look-ahead for SOTA black-box transfer"
+      ],
+      "module_path": "wannado.adv.attacks.transferability.tifgsm_dong2019",
+      "citation": {
+        "key": "dong2019evading",
+        "title": "Evading Defenses to Transferable Adversarial Examples by Translation-Invariant Attacks",
+        "authors": "Yinpeng Dong, Tianyu Pang, Hang Su, and Jun Zhu",
+        "venue": "IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)",
+        "year": 2019,
+        "url": "https://arxiv.org/abs/1904.02884",
+        "bibtex": "@inproceedings{dong2019evading,\n  title={Evading Defenses to Transferable Adversarial Examples by Translation-Invariant Attacks},\n  author={Dong, Yinpeng and Pang, Tianyu and Su, Hang and Zhu, Jun},\n  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},\n  pages={4312--4321},\n  year={2019},\n  url={https://arxiv.org/abs/1904.02884},\n}",
+        "ieee": "Y. Dong, T. Pang, H. Su, and J. Zhu, \"Evading defenses to transferable adversarial examples by translation-invariant attacks,\" in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR), 2019, pp. 4312-4321.",
+        "apa": "Dong, Y., Pang, T., Su, H., & Zhu, J. (2019). Evading defenses to transferable adversarial examples by translation-invariant attacks. Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 4312-4321."
+      }
+    },
+    {
+      "id": "vmi_fgsm",
+      "name": "Variance-Tuned MI-FGSM (VMI-FGSM)",
+      "family": "transferability",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "medium",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl",
+        "unsupervised"
+      ],
+      "parent_id": "mi_fgsm",
+      "diff_from_parent": "Adds local neighborhood gradient variance tuning v_t across N random probes around each iterate.",
+      "summary_plain": "Samples N local neighbors per step to cancel surrogate gradient variance and boost black-box transferability.",
+      "when_to_use": "Strong domain-agnostic transfer attack when spatial transforms (DI/TI) do not apply or when attacking defended surrogates.",
+      "when_not_to_use": "Under ultra-tight runtime budgets where evaluating num_variance_samples extra gradients per step is too slow (use ni_fgsm).",
+      "extension_hooks": [
+        "Add Nesterov look-ahead before g_t evaluation -> VNI-FGSM",
+        "Sample neighborhood perturbations along Rayleigh/phase manifold for complex wireless signals"
+      ],
+      "module_path": "wannado.adv.attacks.transferability.vmifgsm_wang2021",
+      "citation": {
+        "key": "wang2021enhancing",
+        "title": "Enhancing the Transferability of Adversarial Attacks Through Variance Tuning",
+        "authors": "Xiaosen Wang and Kun He",
+        "venue": "IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)",
+        "year": 2021,
+        "url": "https://arxiv.org/abs/2103.15571",
+        "bibtex": "@inproceedings{wang2021enhancing,\n  title={Enhancing the Transferability of Adversarial Attacks Through Variance Tuning},\n  author={Wang, Xiaosen and He, Kun},\n  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},\n  pages={1924--1933},\n  year={2021},\n  url={https://arxiv.org/abs/2103.15571},\n}",
+        "ieee": "X. Wang and K. He, \"Enhancing the transferability of adversarial attacks through variance tuning,\" in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR), 2021, pp. 1924-1933.",
+        "apa": "Wang, X., & He, K. (2021). Enhancing the transferability of adversarial attacks through variance tuning. Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 1924-1933."
+      }
+    },
+    {
+      "id": "uap",
+      "name": "Universal Adversarial Perturbation (UAP)",
+      "family": "universal",
+      "tier": "S",
+      "threat_model": "white_box",
+      "requires_training": false,
+      "compute_cost": "high",
+      "supported_norms": [
+        "linf",
+        "l2",
+        "relative_l2",
+        "jsr_db"
+      ],
+      "supported_domains": [
+        "vision",
+        "wireless",
+        "tabular",
+        "timeseries",
+        "drl"
+      ],
+      "parent_id": "deepfool",
+      "diff_from_parent": "Aggregates per-sample minimal DeepFool boundary steps across a dataset into a single input-agnostic perturbation vector projected onto an eps ball.",
+      "summary_plain": "Learns ONE single input-agnostic perturbation vector that fools a model across almost an entire batch simultaneously.",
+      "when_to_use": "When evaluating streaming or real-time vulnerabilities (e.g., always-on wireless jammer or universal patch) where per-sample optimization is impossible.",
+      "when_not_to_use": "When sample-specific worst-case robustness is needed (use APGD or FAB), or for continuous regression without class decision boundaries.",
+      "extension_hooks": [
+        "Replace sequential DeepFool aggregation with mini-batch EoT-SGD/Adam optimization",
+        "Condition universal vector on class labels for targeted UAP"
+      ],
+      "module_path": "wannado.adv.attacks.universal.uap_moosavi2017",
+      "citation": {
+        "key": "moosavidezfooli2017universal",
+        "title": "Universal Adversarial Perturbations",
+        "authors": "Seyed-Mohsen Moosavi-Dezfooli, Alhussein Fawzi, Omar Fawzi, and Pascal Frossard",
+        "venue": "IEEE Conference on Computer Vision and Pattern Recognition (CVPR)",
+        "year": 2017,
+        "url": "https://arxiv.org/abs/1610.08401",
+        "bibtex": "@inproceedings{moosavidezfooli2017universal,\n  title={Universal Adversarial Perturbations},\n  author={Moosavi-Dezfooli, Seyed-Mohsen and Fawzi, Alhussein and Fawzi, Omar and Frossard, Pascal},\n  booktitle={Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)},\n  pages={1765--1773},\n  year={2017},\n  doi={10.1109/CVPR.2017.17},\n  url={https://arxiv.org/abs/1610.08401},\n}",
+        "ieee": "S.-M. Moosavi-Dezfooli, A. Fawzi, O. Fawzi, and P. Frossard, \"Universal adversarial perturbations,\" in Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR), 2017, pp. 1765-1773, doi: 10.1109/CVPR.2017.17.",
+        "apa": "Moosavi-Dezfooli, S.-M., Fawzi, A., Fawzi, O., & Frossard, P. (2017). Universal adversarial perturbations. Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR), 1765-1773."
+      }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+---
+description: Adversarial learning robustness testing, attack ejection, and paper reporting workflows with wannado-adv.
+alwaysApply: false
+---
+
+# wannado-adv Cursor Co-Pilot Rule
+
+For complete workflow steps, read `.agents/skills/wannado-adv/SKILL.md` (or `AGENTS.md`) and run `wannado-adv inspect .` first.
+
+0. **Scope & Sibling Coexistence (`wannado-drl`)**: Activate `wannado-adv` ONLY for adversarial attacks, robustness auditing, and adversarial training (`./adv_eval/`). Defer initial MDP design / RL policy training to `./drl_lab/` (`wannado-drl`); when testing robustness of a trained DRL policy, embed frozen `obs_rms_state` (`mean`, `var`) via differentiable PyTorch ops inside `VictimInterface`.
+
+1. **Inspect First & Re-Scan**: Never guess project structure or input tensor ranges (`[0, 1]` vs `complex64`). Run `wannado-adv inspect .` + `probe_model_context()`.
+2. **Non-Intrusive Boundary & Single-File Ejection**: Isolate evaluation under `./adv_eval/` via `wannado-adv scaffold`, and use `wannado-adv eject <attack_id> --dest ./adv_eval/attacks` before editing any attack logic.
+3. **Zero-Jargon Interactive Guidance**: Reply in the user's conversation language. Explain every unfamiliar knob (`eps`/`norm`, `steps`/`queries`, `N`) with a plain everyday analogy and higher-vs-lower trade-off BEFORE showing options, make every option label explain its real-world effect, and report measured hardware ETA via `estimate_runtime()`.
+4. **Zero Citation Hallucination & Paper Exports**: Run `evaluate_suite(..., run_audit=True)`, verify Carlini audit red flags, export verbatim citations via `wannado-adv cite`, and summarize all experimental variables.
