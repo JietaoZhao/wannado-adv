@@ -2,6 +2,12 @@
 
 > Part of the **WannaDo** human–AI collaborative scientific research platform · **Release `v1.0.3`**
 
+[![Version](https://img.shields.io/badge/version-1.0.3-2563eb)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.10%2B-0f766e)](pyproject.toml)
+[![Families](https://img.shields.io/badge/threat%20families-9%20paradigms-7c3aed)](#quick-usage-python--cli)
+[![Attacks](https://img.shields.io/badge/executable%20attacks-35%20single--file-059669)](#quick-usage-python--cli)
+[![License: MIT](https://img.shields.io/badge/license-MIT-475569)](LICENSE)
+
 *"Wanna do an adversarial robustness test on any of your machine learning projects?"*
 
 `wannado-adv` is an **AI-focused adversarial learning platform** built around three core moats:
