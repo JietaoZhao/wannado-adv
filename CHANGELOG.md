@@ -2,6 +2,11 @@
 
 All notable changes to `wannado-adv` will be documented in this file.
 
+## [1.0.6] - 2026-11-17
+
+### Changed
+- **English-first documentation & skill templates**: Removed remaining bilingual Chinese examples from `SKILL.md` templates and the `docs/index.html` feedback portal so all public repository docs and UI text default cleanly to English.
+
 ## [1.0.5] - 2026-11-17
 
 ### Added

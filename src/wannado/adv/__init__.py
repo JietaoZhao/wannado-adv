@@ -11,7 +11,7 @@ from typing import Any
 
 from wannado.adv.attacks import ATTACK_EXPORTS, lazy_resolve
 
-__version__ = "1.0.5"
+__version__ = "1.0.6"
 
 _SUBMODULES = frozenset(
     {

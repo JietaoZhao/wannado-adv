@@ -57,7 +57,7 @@ Before launching heavy evaluations (or whenever asking the user to choose parame
    - **Higher vs. Lower Trade-Off**: Explicitly tell the user what breaks if it is too small (too easy / misses real bugs) vs. too large (distorts the image/signal unrealistically so any model fails) or too slow vs. noisy.
 3. **Self-Explanatory Options (Even Inside IDE Multi-Choice Cards)**: Whenever presenting options or using an IDE question widget, **every single option label must explain what happens in practice + when to pick it**, not just numbers or `"Recommended"`.
    - *Bad*: `8/255 (Linf) [Recommended]` or `standard (steps=20)`
-   - *Good*: `Balanced standard noise (~3% pixel shift, invisible to eyes — matches CIFAR-10 papers, eps=8/255) [Recommended]` / `日常通用强度（允许极轻微、人眼看不出变化的 ~3% 噪点，刚好对齐绝大多数论文基准，即 eps=8/255）[推荐]`
+   - *Good*: `Balanced standard noise (~3% pixel shift, invisible to eyes — matches CIFAR-10 papers, eps=8/255) [Recommended]`
 4. **Confirm Three Decisions + Calibrated ETA Before Heavy Runs**:
    - **Noise/Jamming Strength (`eps` & `norm`)** with visual/power meaning per preset.
    - **Attack Thoroughness (`goal` / `steps` / `queries`)**: fast bug check vs. thorough search + blind anti-cheating verification.
