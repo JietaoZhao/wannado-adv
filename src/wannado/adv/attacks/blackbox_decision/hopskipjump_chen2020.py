@@ -32,15 +32,19 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
+from typing import Any
 
 import torch
 
 from wannado.adv.core import (
     AttackMeta,
     AttackResult,
+    clamp_to_bounds,
+    coerce_clip_bounds,
     compute_perturbation_norm,
     eval_mode,
     make_generator,
+    predict_labels,
     resolve_eps_budget,
     safe_l2_norm,
 )
@@ -97,24 +101,15 @@ def _query_decisions(
     z: torch.Tensor,
 ) -> tuple[torch.Tensor, int]:
     """Query ONLY hard predicted class IDs from either logits or label-only oracle."""
-    out = model_or_fn(z)
-    if out.ndim >= 2:
-        preds = out.argmax(dim=-1).reshape(-1).to(torch.long)
-    elif out.ndim == 1:
-        preds = out.to(torch.long)
-    else:
-        preds = out.reshape(1).to(torch.long)
-    return preds, z.shape[0]
+    return predict_labels(model_or_fn(z)), z.shape[0]
 
 
 def _is_adversarial(preds: torch.Tensor, ref_label: int, targeted: bool) -> torch.Tensor:
     return preds == ref_label if targeted else preds != ref_label
 
 
-def _clip(z: torch.Tensor, clip_bounds: tuple[float, float] | None) -> torch.Tensor:
-    if clip_bounds is None:
-        return z
-    return torch.clamp(z, min=clip_bounds[0], max=clip_bounds[1])
+def _clip(z: torch.Tensor, clip_bounds: tuple[Any, Any] | None) -> torch.Tensor:
+    return clamp_to_bounds(z, clip_bounds)
 
 
 def _norm_distance(x_ref: torch.Tensor, x_cand: torch.Tensor, norm: str) -> float:
@@ -224,12 +219,12 @@ def _initialize_adversarial(
     batch_try = 32
     real_dtype = torch.float32 if x_single.dtype in (torch.float32, torch.complex64) else torch.float64
     if clip_bounds is not None:
-        low, high = clip_bounds
+        low, high = coerce_clip_bounds(clip_bounds, x_single)
         for _ in range(10):
             cands = (
                 torch.rand((batch_try, *x_single.shape[1:]), device=x_single.device, dtype=real_dtype, generator=generator)
-                * (high - low)
-                + low
+                * (high.to(real_dtype) - low.to(real_dtype))
+                + low.to(real_dtype)
             ).to(x_single.dtype)
             preds, q = _query_decisions(model_or_fn, cands)
             queries += q
@@ -320,8 +315,9 @@ def _hopskipjump_single_sample(
     stepsize_search: str,
     gamma: float,
     x_init_pool: torch.Tensor | None,
-    clip_bounds: tuple[float, float] | None,
+    clip_bounds: tuple[Any, Any] | None,
     generator: torch.Generator | None,
+    max_queries_remaining: int | None = None,
 ) -> tuple[torch.Tensor, int, bool]:
     """Run HopSkipJump on one sample ``(1, ...)`` returning ``(x_adv, queries, success)``."""
     queries = 0
@@ -337,6 +333,8 @@ def _hopskipjump_single_sample(
     queries += init_q
     if x_adv is None:
         return x_single.clone(), queries, False
+    if max_queries_remaining is not None and queries >= max_queries_remaining:
+        return x_adv, queries, True
 
     d_real = x_single[0].numel() * (2 if x_single.is_complex() else 1)
     if norm == "linf":
@@ -352,6 +350,8 @@ def _hopskipjump_single_sample(
     dist = _norm_distance(x_single, x_adv, norm=norm)
 
     for step_idx in range(1, steps + 1):
+        if max_queries_remaining is not None and queries >= max_queries_remaining:
+            break
         delta_probe = math.sqrt(max(d_real, 1)) * theta * max(dist, 1e-6)
         num_evals = min(max_num_evals, round(initial_num_evals * math.sqrt(step_idx)))
         num_evals = max(num_evals, 1)
@@ -430,7 +430,8 @@ def hopskipjump(
     norm: str = "l2",
     targeted: bool = False,
     x_init: torch.Tensor | None = None,
-    clip_bounds: tuple[float, float] | None = None,
+    clip_bounds: tuple[Any, Any] | None = None,
+    max_queries: int | None = None,
     seed: int | None = None,
 ) -> AttackResult:
     """Run HopSkipJump decision-based black-box attack using hard labels only.
@@ -457,6 +458,8 @@ def hopskipjump(
     """
     if steps < 1:
         raise ValueError(f"steps must be >= 1, got {steps}.")
+    if max_queries is not None and max_queries < 1:
+        raise ValueError(f"max_queries must be >= 1, got {max_queries}.")
     if clip_bounds is not None and x.is_complex():
         raise ValueError("clip_bounds is only supported for real-valued tensors.")
     if targeted and y is None:
@@ -492,6 +495,8 @@ def hopskipjump(
         ref_labels = y if y is not None else clean_preds
 
         for i in range(batch_size):
+            if max_queries is not None and total_queries >= max_queries:
+                break
             ref_i = int(ref_labels[i].item())
             clean_pred_i = int(clean_preds[i].item())
             already_adv = (clean_pred_i == ref_i) if targeted else (y is not None and clean_pred_i != ref_i)
@@ -500,6 +505,7 @@ def hopskipjump(
                 continue
 
             pool_i = x_init[i : i + 1] if (x_init is not None and x_init.shape[0] == batch_size) else x_init
+            remaining = None if max_queries is None else max(1, max_queries - total_queries)
             adv_i, q_i, ok_i = _hopskipjump_single_sample(
                 model_or_fn=model_or_fn,
                 x_single=x_clean[i : i + 1],
@@ -514,6 +520,7 @@ def hopskipjump(
                 x_init_pool=pool_i,
                 clip_bounds=clip_bounds,
                 generator=generator,
+                max_queries_remaining=remaining,
             )
             total_queries += q_i
             if ok_i:

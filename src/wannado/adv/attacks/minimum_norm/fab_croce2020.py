@@ -31,14 +31,19 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from typing import Any
 
 import torch
 
 from wannado.adv.core import (
     AttackMeta,
     AttackResult,
+    clamp_to_bounds,
+    coerce_clip_bounds,
     compute_perturbation_norm,
     eval_mode,
+    normalize_classification_logits,
+    predict_labels,
     random_init_perturbation,
     safe_l2_norm,
     step_direction,
@@ -103,7 +108,7 @@ def _project_hyperplane_box(
     w: torch.Tensor,
     h_val: float,
     norm: str,
-    clip_bounds: tuple[float, float] | None,
+    clip_bounds: tuple[Any, Any] | None,
 ) -> torch.Tensor:
     """Compute minimal-norm displacement ``d`` from ``x_ref`` to ``h_val + <w, d> = 0``."""
     if clip_bounds is None:
@@ -119,7 +124,7 @@ def _project_hyperplane_box(
         return (-h_val / w_l2_sq) * w
 
     # Real tensor with box constraints [low, high]: solve via exact 1D monotonic bisection.
-    low, high = clip_bounds
+    low, high = coerce_clip_bounds(clip_bounds, x_ref)
     d_low = low - x_ref
     d_high = high - x_ref
     sign_h = -1.0 if h_val >= 0 else 1.0
@@ -170,7 +175,7 @@ def _fab_single_sample(
     max_classes: int,
     targeted: bool,
     target_label: int | None,
-    clip_bounds: tuple[float, float] | None,
+    clip_bounds: tuple[Any, Any] | None,
     generator: torch.Generator | None,
 ) -> tuple[torch.Tensor, int]:
     """Run Algorithm 1 of Croce & Hein (ICML 2020) on a single sample ``(1, ...)``."""
@@ -179,7 +184,7 @@ def _fab_single_sample(
     total_steps = 0
 
     with torch.no_grad():
-        logits_clean = model_or_fn(x_single)
+        logits_clean = normalize_classification_logits(model_or_fn(x_single))
         num_classes = logits_clean.shape[1]
         sorted_classes = logits_clean.argsort(dim=1, descending=True)[0]
         if targeted:
@@ -211,8 +216,8 @@ def _fab_single_sample(
         for _ in range(steps):
             total_steps += 1
             x_in = x_curr.detach().requires_grad_(True)
-            logits = model_or_fn(x_in)
-            pred = int(logits.argmax(dim=1)[0].item())
+            logits = normalize_classification_logits(model_or_fn(x_in))
+            pred = int(predict_labels(logits)[0].item())
 
             is_fooled = (pred == target_label) if targeted else (pred != y_orig)
             if is_fooled:
@@ -282,11 +287,10 @@ def _fab_single_sample(
                 x_curr = (1.0 - beta) * x_single + beta * x_forward
             else:
                 x_curr = x_forward
-            if clip_bounds is not None:
-                x_curr = torch.clamp(x_curr, min=clip_bounds[0], max=clip_bounds[1])
+            x_curr = clamp_to_bounds(x_curr, clip_bounds)
 
         with torch.no_grad():
-            pred_end = int(model_or_fn(x_curr).argmax(dim=1)[0].item())
+            pred_end = int(predict_labels(model_or_fn(x_curr))[0].item())
             is_fooled = (pred_end == target_label) if targeted else (pred_end != y_orig)
             if is_fooled:
                 cur_dist = _norm_p(x_curr - x_single, norm=norm)
@@ -354,7 +358,7 @@ def fab(
 
     with eval_mode(model_or_fn):
         with torch.no_grad():
-            clean_preds = model_or_fn(x_clean).argmax(dim=1)
+            clean_preds = predict_labels(model_or_fn(x_clean))
 
         for idx in range(batch_size):
             pred_i = int(clean_preds[idx].item())

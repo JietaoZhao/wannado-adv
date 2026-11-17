@@ -20,9 +20,33 @@ from wannado.adv.attacks import ATTACK_EXPORTS
 from wannado.adv.audit.carlini_auditor import AuditReport, audit_robustness
 from wannado.adv.audit.preflight import PreflightReport, preflight
 from wannado.adv.catalog.build_catalog import load_catalog
+from wannado.adv.core.losses import predict_labels, unwrap_model_outputs
 from wannado.adv.core.projections import compute_perturbation_norm
 from wannado.adv.core.types import AttackMeta, AttackResult
 from wannado.adv.core.utils import eval_mode
+
+
+def _serialize_bounds(bounds: Any) -> Any:
+    if bounds is None:
+        return None
+    out: list[Any] = []
+    for val in bounds:
+        if isinstance(val, torch.Tensor):
+            out.append(val.detach().cpu().tolist())
+        elif hasattr(val, "tolist"):
+            out.append(val.tolist())
+        else:
+            out.append(float(val))
+    return out
+
+
+def _format_bounds_brief(bounds: Any) -> str:
+    if bounds is None:
+        return "None"
+    ser = _serialize_bounds(bounds)
+    if isinstance(ser, list) and len(ser) == 2 and all(isinstance(v, (int, float)) for v in ser):
+        return f"({ser[0]}, {ser[1]})"
+    return "per-feature bounds"
 
 _CARLINI_2019_BIBTEX = (
     "@article{carlini2019evaluating,\n"
@@ -124,7 +148,7 @@ class EvaluationReport:
     domain: str
     norm: str
     eps: float
-    clip_bounds: tuple[float, float] | None
+    clip_bounds: tuple[Any, Any] | None
     num_samples: int
     seed: int
     device: str
@@ -153,7 +177,7 @@ class EvaluationReport:
                 "domain": self.domain,
                 "norm": self.norm,
                 "eps": self.eps,
-                "clip_bounds": list(self.clip_bounds) if self.clip_bounds is not None else None,
+                "clip_bounds": _serialize_bounds(self.clip_bounds),
                 "num_samples": self.num_samples,
                 "clean_acc": self.clean_acc,
                 "notes": self.notes,
@@ -185,7 +209,15 @@ class EvaluationReport:
     def to_latex(self) -> str:
         """Render publication-ready LaTeX booktabs table with threat-model and budget disclosures."""
         def _esc(val: str) -> str:
-            return val.replace("&", "\\&").replace("_", "\\_").replace("%", "\\%")
+            return (
+                val.replace("&", "\\&")
+                .replace("%", "\\%")
+                .replace("$", "\\$")
+                .replace("#", "\\#")
+                .replace("_", "\\_")
+                .replace("^", "\\^{}")
+                .replace("~", "\\~{}")
+            )
 
         eps_desc = f"{self.eps:+.1f}\\,\\text{{dB JSR}}" if self.norm == "jsr_db" else f"{self.eps:.4g}"
         lines = [
@@ -241,7 +273,7 @@ class EvaluationReport:
             f"- **Timestamp (UTC)**: `{self.timestamp_utc}`",
             f"- **Domain & Hardware**: `{self.domain}` | `device={self.device}` | `dtype={self.dtype}` | `PyTorch={self.torch_version}`",
             f"- **Evaluation Scale**: `N={self.num_samples}` samples | `seed={self.seed}` | `eval()` & parameter-grad isolation verified",
-            f"- **Perturbation Constraint**: `norm='{self.norm}'`, `eps={eps_phys}`, `clip_bounds={self.clip_bounds}`",
+            f"- **Perturbation Constraint**: `norm='{self.norm}'`, `eps={eps_phys}`, `clip_bounds={_format_bounds_brief(self.clip_bounds)}`",
         ]
         if self.clean_acc is not None:
             lines.append(f"- **Clean Baseline Accuracy**: `{self.clean_acc * 100.0:.2f}%`")
@@ -353,7 +385,7 @@ def _build_call_kwargs(
     fn: Callable[..., AttackResult],
     eps: float,
     norm: str,
-    clip_bounds: tuple[float, float] | None,
+    clip_bounds: tuple[Any, Any] | None,
     seed: int,
     overrides: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -385,7 +417,7 @@ def _build_call_kwargs(
         elif isinstance(val, torch.Tensor):
             disclosed[pname] = f"Tensor{list(val.shape)}"
         elif isinstance(val, tuple):
-            disclosed[pname] = list(val)
+            disclosed[pname] = _serialize_bounds(val) if len(val) == 2 and any(isinstance(v, torch.Tensor) or hasattr(v, "tolist") for v in val) else list(val)
         else:
             disclosed[pname] = val
 
@@ -401,7 +433,7 @@ def evaluate_suite(
     norm: str = "linf",
     attacks: Sequence[str | Callable[..., AttackResult]] = ("fgsm", "pgd", "apgd_dlr", "square_attack"),
     attack_kwargs: dict[str, dict[str, Any]] | None = None,
-    clip_bounds: tuple[float, float] | None = None,
+    clip_bounds: tuple[Any, Any] | None = None,
     run_preflight: bool = True,
     run_audit: bool = True,
     audit_samples: int = 64,
@@ -436,10 +468,23 @@ def evaluate_suite(
     is_classification = False
     clean_acc: float | None = None
     with eval_mode(model_or_fn), torch.no_grad():
-        clean_out = model_or_fn(x_clean)
-        if clean_out.ndim == 2 and y_clean.dtype in (torch.int64, torch.int32, torch.long):
+        clean_out = unwrap_model_outputs(model_or_fn(x_clean))
+        if clean_out.ndim >= 1 and y_clean.dtype in (
+            torch.int64,
+            torch.int32,
+            torch.int16,
+            torch.int8,
+            torch.uint8,
+            torch.long,
+        ):
             is_classification = True
-            clean_acc = float((clean_out.argmax(dim=1) == y_clean).float().mean().item())
+            clean_preds = predict_labels(clean_out)
+            y_cmp = (
+                y_clean.squeeze(1)
+                if clean_preds.ndim == 1 and y_clean.ndim == 2 and y_clean.shape[1] == 1
+                else y_clean
+            )
+            clean_acc = float((clean_preds == y_cmp).float().mean().item())
 
     if verbose:
         clean_msg = f"{clean_acc * 100:.2f}%" if clean_acc is not None else "non-classification"
@@ -497,8 +542,13 @@ def evaluate_suite(
             asr: float | None = None
             if is_classification:
                 with eval_mode(model_or_fn), torch.no_grad():
-                    adv_out = model_or_fn(res.x_adv)
-                rob_acc = float((adv_out.argmax(dim=1) == y_clean).float().mean().item())
+                    adv_preds = predict_labels(model_or_fn(res.x_adv))
+                y_cmp = (
+                    y_clean.squeeze(1)
+                    if adv_preds.ndim == 1 and y_clean.ndim == 2 and y_clean.shape[1] == 1
+                    else y_clean
+                )
+                rob_acc = float((adv_preds == y_cmp).float().mean().item())
                 asr = 1.0 - rob_acc
 
             q_used = res.extra.get("queries") if isinstance(res.extra, dict) else None

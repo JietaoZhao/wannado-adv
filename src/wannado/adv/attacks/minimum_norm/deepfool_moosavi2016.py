@@ -30,14 +30,18 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from typing import Any
 
 import torch
 
 from wannado.adv.core import (
     AttackMeta,
     AttackResult,
+    clamp_to_bounds,
     compute_perturbation_norm,
     eval_mode,
+    normalize_classification_logits,
+    predict_labels,
     safe_l2_norm,
     step_direction,
 )
@@ -94,11 +98,11 @@ def _deepfool_single_sample(
     steps: int,
     overshoot: float,
     max_classes: int,
-    clip_bounds: tuple[float, float] | None,
+    clip_bounds: tuple[Any, Any] | None,
 ) -> tuple[torch.Tensor, int]:
     """Run DeepFool hyperplane projection on a single sample ``(1, ...)``."""
     with torch.no_grad():
-        logits_0 = model_or_fn(x_single)
+        logits_0 = normalize_classification_logits(model_or_fn(x_single))
         num_classes = logits_0.shape[1]
         sorted_classes = logits_0.argsort(dim=1, descending=True)[0]
         orig_label = int(sorted_classes[0].item())
@@ -111,7 +115,7 @@ def _deepfool_single_sample(
     for step_idx in range(steps):
         steps_taken = step_idx + 1
         x_in = x_adv.detach().requires_grad_(True)
-        logits = model_or_fn(x_in)
+        logits = normalize_classification_logits(model_or_fn(x_in))
         if int(logits.argmax(dim=1)[0].item()) != orig_label:
             break
 
@@ -148,19 +152,15 @@ def _deepfool_single_sample(
             break
 
         r_tot = r_tot + (1.0 + overshoot) * best_r
-        x_adv = x_single + r_tot
-        if clip_bounds is not None:
-            x_adv = torch.clamp(x_adv, min=clip_bounds[0], max=clip_bounds[1])
+        x_adv = clamp_to_bounds(x_single + r_tot, clip_bounds)
 
     with torch.no_grad():
-        final_pred = int(model_or_fn(x_adv).argmax(dim=1)[0].item())
+        final_pred = int(predict_labels(model_or_fn(x_adv))[0].item())
     if final_pred == orig_label:
         # Try one gentle final overshoot scaling if still barely on the clean side.
-        x_retry = x_single + (1.0 + overshoot * 2.0) * r_tot
-        if clip_bounds is not None:
-            x_retry = torch.clamp(x_retry, min=clip_bounds[0], max=clip_bounds[1])
+        x_retry = clamp_to_bounds(x_single + (1.0 + overshoot * 2.0) * r_tot, clip_bounds)
         with torch.no_grad():
-            if int(model_or_fn(x_retry).argmax(dim=1)[0].item()) != orig_label:
+            if int(predict_labels(model_or_fn(x_retry))[0].item()) != orig_label:
                 x_adv = x_retry
 
     return x_adv.detach(), steps_taken
@@ -208,7 +208,7 @@ def deepfool(
 
     with eval_mode(model_or_fn):
         with torch.no_grad():
-            clean_preds = model_or_fn(x_clean).argmax(dim=1)
+            clean_preds = predict_labels(model_or_fn(x_clean))
 
         for idx in range(batch_size):
             if y is not None and int(clean_preds[idx].item()) != int(y[idx].item()):

@@ -8,6 +8,7 @@ Jamming-to-Signal Ratio (JSR in dB) budgets.
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import torch
 
@@ -18,6 +19,46 @@ def _real_dtype_for(x: torch.Tensor) -> torch.dtype:
     if x.is_complex():
         return torch.float32 if x.dtype == torch.complex64 else torch.float64
     return x.dtype if x.is_floating_point() else torch.float32
+
+
+def coerce_clip_bounds(
+    clip_bounds: tuple[Any, Any],
+    x_ref: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Convert scalar, NumPy, list, or Tensor ``(low, high)`` bounds into broadcastable tensors."""
+    if not isinstance(clip_bounds, (tuple, list)) or len(clip_bounds) != 2:
+        raise ValueError(f"clip_bounds must be a 2-tuple (min, max), got {clip_bounds!r}.")
+    real_dtype = _real_dtype_for(x_ref)
+    low_raw, high_raw = clip_bounds
+    lo_t = torch.as_tensor(low_raw, device=x_ref.device, dtype=real_dtype)
+    hi_t = torch.as_tensor(high_raw, device=x_ref.device, dtype=real_dtype)
+
+    def _align(t: torch.Tensor) -> torch.Tensor:
+        if t.ndim == 0:
+            return t
+        if t.shape == x_ref[0].shape:
+            return t.unsqueeze(0)
+        if t.ndim == 1 and x_ref.ndim >= 2 and t.shape[0] == x_ref.shape[1]:
+            return t.view((1, t.shape[0]) + (1,) * (x_ref.ndim - 2))
+        if t.numel() == x_ref[0].numel():
+            return t.reshape((1,) + x_ref[0].shape)
+        return t
+
+    lo_t = _align(lo_t)
+    hi_t = _align(hi_t)
+    if bool((lo_t > hi_t).any().item()):
+        raise ValueError(f"Invalid clip_bounds: min > max detected (min={lo_t}, max={hi_t}).")
+    return lo_t, hi_t
+
+
+def clamp_to_bounds(x_val: torch.Tensor, clip_bounds: tuple[Any, Any] | None) -> torch.Tensor:
+    """Clamp real-valued tensor to scalar OR per-column/element ``(low, high)`` bounds."""
+    if clip_bounds is None:
+        return x_val
+    if x_val.is_complex():
+        raise ValueError("clip_bounds is only valid for real-valued tensors.")
+    lo_t, hi_t = coerce_clip_bounds(clip_bounds, x_val)
+    return torch.minimum(torch.maximum(x_val, lo_t), hi_t)
 
 
 def safe_l2_norm(
@@ -159,7 +200,7 @@ def _project_l1_box(
     delta: torch.Tensor,
     x: torch.Tensor,
     eps_budget: torch.Tensor,
-    clip_bounds: tuple[float, float] | None,
+    clip_bounds: tuple[Any, Any] | None,
 ) -> torch.Tensor:
     """Exact Euclidean projection onto the L1 ball intersected with optional box bounds."""
     b = delta.shape[0]
@@ -170,19 +211,18 @@ def _project_l1_box(
     lo_b: torch.Tensor | None = None
     hi_b: torch.Tensor | None = None
     if clip_bounds is not None:
-        low, high = clip_bounds
-        if low > high:
-            raise ValueError(f"Invalid clip_bounds={clip_bounds}: min > max.")
-        excess_l1 = (x.clamp(min=low, max=high) - x).abs().reshape(b, -1).sum(dim=1, keepdim=True).to(real_dtype)
+        lo_t, hi_t = coerce_clip_bounds(clip_bounds, x)
+        x_box = torch.minimum(torch.maximum(x, lo_t), hi_t)
+        excess_l1 = (x_box - x).abs().reshape(b, -1).sum(dim=1, keepdim=True).to(real_dtype)
         if bool((excess_l1 > eps_flat + 1e-4).any().item()):
             raise ValueError(
-                f"Clean inputs lie outside clip_bounds={clip_bounds} by more than the L1 budget "
+                f"Clean inputs lie outside clip_bounds by more than the L1 budget "
                 f"(required L1 shift up to {float(excess_l1.max().item()):.4g} > budget "
                 f"{float(eps_flat.min().item()):.4g}). Pass clip_bounds=None for standardized or unbounded inputs."
             )
-        lo_b = (low - x).reshape(b, -1)
-        hi_b = (high - x).reshape(b, -1)
-        z_cand = z.clamp(min=lo_b, max=hi_b)
+        lo_b = (torch.broadcast_to(lo_t, x.shape) - x).reshape(b, -1)
+        hi_b = (torch.broadcast_to(hi_t, x.shape) - x).reshape(b, -1)
+        z_cand = torch.minimum(torch.maximum(z, lo_b), hi_b)
     else:
         z_cand = z
 
@@ -201,7 +241,7 @@ def _project_l1_box(
         shrunk_mag = (mag - mid_lam).clamp(min=0.0)
         cand = phase * shrunk_mag if not z.is_complex() else phase * shrunk_mag.to(z.dtype)
         if lo_b is not None and hi_b is not None:
-            cand = cand.clamp(min=lo_b, max=hi_b)
+            cand = torch.minimum(torch.maximum(cand, lo_b), hi_b)
         l1_val = cand.abs().sum(dim=1, keepdim=True).to(real_dtype)
         too_large = l1_val > eps_flat
         lo_lam = torch.where(too_large, mid_lam, lo_lam)
@@ -210,7 +250,7 @@ def _project_l1_box(
     shrunk_final = (mag - hi_lam).clamp(min=0.0)
     proj = phase * shrunk_final if not z.is_complex() else phase * shrunk_final.to(z.dtype)
     if lo_b is not None and hi_b is not None:
-        proj = proj.clamp(min=lo_b, max=hi_b)
+        proj = torch.minimum(torch.maximum(proj, lo_b), hi_b)
     out = torch.where(needs_proj, proj, z_cand)
     return out.reshape_as(delta)
 
@@ -220,14 +260,19 @@ def project_perturbation(
     x: torch.Tensor,
     eps_budget: torch.Tensor,
     norm: str,
-    clip_bounds: tuple[float, float] | None = None,
+    clip_bounds: tuple[Any, Any] | None = None,
+    perturb_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Project perturbation ``delta`` onto the norm ball and optional box bounds."""
+    """Project perturbation ``delta`` onto the norm ball, optional immutable-feature mask, and box bounds."""
     if clip_bounds is not None and x.is_complex():
         raise ValueError(
             "clip_bounds=(min, max) is only valid for real-valued tensors; "
             "for complex signals use norm constraints such as 'l2', 'relative_l2', or 'jsr_db'."
         )
+
+    if perturb_mask is not None:
+        mask = perturb_mask.to(device=delta.device, dtype=delta.dtype)
+        delta = delta * mask
 
     if norm == "linf":
         if delta.is_complex():
@@ -238,7 +283,8 @@ def project_perturbation(
         else:
             delta = torch.clamp(delta, min=-eps_budget, max=eps_budget)
     elif norm == "l1":
-        return _project_l1_box(delta, x, eps_budget, clip_bounds)
+        proj_l1 = _project_l1_box(delta, x, eps_budget, clip_bounds)
+        return proj_l1 * perturb_mask.to(device=delta.device, dtype=delta.dtype) if perturb_mask is not None else proj_l1
     elif norm in ("l2", "relative_l2", "jsr_db"):
         d_norm = _batch_l2_norm(delta).to(_real_dtype_for(delta)).view_as(eps_budget)
         factor = torch.where(
@@ -251,15 +297,13 @@ def project_perturbation(
         raise ValueError(f"Unsupported norm '{norm}'.")
 
     if clip_bounds is not None:
-        low, high = clip_bounds
-        if low > high:
-            raise ValueError(f"Invalid clip_bounds={clip_bounds}: min > max.")
-        x_box = x.clamp(min=low, max=high)
+        lo_t, hi_t = coerce_clip_bounds(clip_bounds, x)
+        x_box = torch.minimum(torch.maximum(x, lo_t), hi_t)
         excess = x_box - x
         if norm == "linf":
             if bool((excess.abs() > eps_budget + 1e-5).any().item()):
                 raise ValueError(
-                    f"Clean inputs lie outside clip_bounds={clip_bounds} by more than the Linf budget "
+                    f"Clean inputs lie outside clip_bounds by more than the Linf budget "
                     f"(min={float(x.min().item()):.4g}, max={float(x.max().item()):.4g}). "
                     "Pass clip_bounds=None for standardized or unbounded inputs."
                 )
@@ -267,11 +311,11 @@ def project_perturbation(
             excess_l2 = _batch_l2_norm(excess).to(_real_dtype_for(x)).view_as(eps_budget)
             if bool((excess_l2 > eps_budget + 1e-4).any().item()):
                 raise ValueError(
-                    f"Clean inputs lie outside clip_bounds={clip_bounds} by more than the {norm} budget "
+                    f"Clean inputs lie outside clip_bounds by more than the {norm} budget "
                     f"(required shift L2 up to {float(excess_l2.max().item()):.4g}). "
                     "Pass clip_bounds=None for standardized or unbounded inputs."
                 )
-        x_adv = torch.clamp(x + delta, min=low, max=high)
+        x_adv = torch.minimum(torch.maximum(x + delta, lo_t), hi_t)
         delta = x_adv - x
         if norm != "linf" and bool((excess != 0).any().item()):
             post_l2 = _batch_l2_norm(delta).to(_real_dtype_for(x)).view_as(eps_budget)
@@ -288,6 +332,8 @@ def project_perturbation(
                     t_hi = torch.where(too_big, t_mid, t_hi)
                 delta = excess + t_lo * diff_box
 
+    if perturb_mask is not None:
+        delta = delta * perturb_mask.to(device=delta.device, dtype=delta.dtype)
     return delta
 
 
@@ -295,8 +341,9 @@ def random_init_perturbation(
     x: torch.Tensor,
     eps_budget: torch.Tensor,
     norm: str,
-    clip_bounds: tuple[float, float] | None = None,
+    clip_bounds: tuple[Any, Any] | None = None,
     generator: torch.Generator | None = None,
+    perturb_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Sample a random starting perturbation strictly inside the feasible set."""
     real_dtype = _real_dtype_for(x)
@@ -352,7 +399,47 @@ def random_init_perturbation(
     else:
         raise ValueError(f"Unsupported norm '{norm}'.")
 
-    return project_perturbation(delta, x, eps_budget, norm=norm, clip_bounds=clip_bounds)
+    return project_perturbation(
+        delta,
+        x,
+        eps_budget,
+        norm=norm,
+        clip_bounds=clip_bounds,
+        perturb_mask=perturb_mask,
+    )
+
+
+def project_discrete_features(
+    x_adv: torch.Tensor,
+    x_clean: torch.Tensor | None = None,
+    *,
+    eps: float | None = None,
+    norm: str = "linf",
+    binary_indices: list[int] | tuple[int, ...] | None = None,
+    integer_indices: list[int] | tuple[int, ...] | None = None,
+    clip_bounds: tuple[Any, Any] | None = None,
+) -> torch.Tensor:
+    """Snap tabular/protocol discrete or binary feature columns to valid discrete levels.
+
+    When ``x_clean`` and ``eps`` are provided, reverts any snapped column whose discrete jump
+    would violate the allowed perturbation radius back to its clean value.
+    """
+    out = x_adv.clone()
+    flat = out.reshape(out.shape[0], -1)
+    if binary_indices:
+        idx_b = list(binary_indices)
+        flat[:, idx_b] = (flat[:, idx_b] >= 0.5).to(flat.dtype)
+    if integer_indices:
+        idx_i = list(integer_indices)
+        flat[:, idx_i] = torch.round(flat[:, idx_i])
+    out = flat.reshape_as(x_adv)
+    out = clamp_to_bounds(out, clip_bounds)
+    if x_clean is not None and eps is not None:
+        within = within_eps_budget(out - x_clean, x_clean, eps=eps, norm=norm).view(
+            (out.shape[0],) + (1,) * (out.ndim - 1)
+        )
+        out = torch.where(within, out, x_clean)
+    return out
 
 
 def compute_perturbation_norm(delta: torch.Tensor, norm: str, x_ref: torch.Tensor | None = None) -> torch.Tensor:

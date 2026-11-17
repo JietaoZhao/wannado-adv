@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from typing import Any
 
 import torch
 
@@ -40,8 +41,12 @@ from wannado.adv.attacks.minimum_norm.deepfool_moosavi2016 import _deepfool_sing
 from wannado.adv.core import (
     AttackMeta,
     AttackResult,
+    clamp_to_bounds,
+    coerce_clip_bounds,
     compute_perturbation_norm,
     eval_mode,
+    normalize_classification_logits,
+    predict_labels,
 )
 from wannado.adv.core.projections import within_eps_budget
 from wannado.adv.core.types import AttackCitation
@@ -162,18 +167,19 @@ def _sparsefool_single_sample(
     deepfool_steps: int,
     overshoot: float,
     max_classes: int,
-    clip_bounds: tuple[float, float] | None,
+    clip_bounds: tuple[Any, Any] | None,
 ) -> tuple[torch.Tensor, int]:
     """Run SparseFool coordinate alternation on a single sample ``(1, ...)``."""
     with torch.no_grad():
-        orig_label = int(model_or_fn(x_single).argmax(dim=1)[0].item())
+        orig_label = int(predict_labels(model_or_fn(x_single))[0].item())
 
     x_cur = x_single.clone()
     total_steps = 0
 
     if clip_bounds is not None:
-        lb_box = torch.full_like(x_single, float(clip_bounds[0]))
-        ub_box = torch.full_like(x_single, float(clip_bounds[1]))
+        lo_t, hi_t = coerce_clip_bounds(clip_bounds, x_single)
+        lb_box = lo_t.expand_as(x_single).clone()
+        ub_box = hi_t.expand_as(x_single).clone()
     else:
         # Unbounded fallback (wireless/tabular): cap single-step coordinate jump to signal scale.
         mag_tensor = x_single.abs() if x_single.is_complex() else x_single
@@ -194,13 +200,13 @@ def _sparsefool_single_sample(
         total_steps += df_steps
 
         with torch.no_grad():
-            df_pred = int(model_or_fn(x_df).argmax(dim=1)[0].item())
+            df_pred = int(predict_labels(model_or_fn(x_df))[0].item())
         if df_pred == orig_label:
             break
 
         # Evaluate hyperplane normal w at boundary point x_df between df_pred and orig_label.
         x_in = x_df.detach().requires_grad_(True)
-        logits_df = model_or_fn(x_in)
+        logits_df = normalize_classification_logits(model_or_fn(x_in))
         diff_logit = logits_df[0, df_pred] - logits_df[0, orig_label]
         (w,) = torch.autograd.grad(diff_logit, x_in, only_inputs=True)
         w = w.detach()
@@ -218,19 +224,17 @@ def _sparsefool_single_sample(
             lb = x_cur - scale
             ub = x_cur + scale
 
-        x_next = _linear_solver(x_cur, w, b_scaled, lb, ub)
-        if clip_bounds is not None:
-            x_next = torch.clamp(x_next, min=clip_bounds[0], max=clip_bounds[1])
+        x_next = clamp_to_bounds(_linear_solver(x_cur, w, b_scaled, lb, ub), clip_bounds)
 
         with torch.no_grad():
-            pred_next = int(model_or_fn(x_next).argmax(dim=1)[0].item())
+            pred_next = int(predict_labels(model_or_fn(x_next))[0].item())
         x_cur = x_next
         if pred_next != orig_label:
             break
 
     # Fall back to last DeepFool point if greedy linear steps never crossed boundary inside max_iter.
     with torch.no_grad():
-        needs_fallback = int(model_or_fn(x_cur).argmax(dim=1)[0].item()) == orig_label
+        needs_fallback = int(predict_labels(model_or_fn(x_cur))[0].item()) == orig_label
     if needs_fallback:
         x_df, df_steps = _deepfool_single_sample(
             model_or_fn=model_or_fn,
@@ -243,7 +247,7 @@ def _sparsefool_single_sample(
         )
         total_steps += df_steps
         with torch.no_grad():
-            if int(model_or_fn(x_df).argmax(dim=1)[0].item()) != orig_label:
+            if int(predict_labels(model_or_fn(x_df))[0].item()) != orig_label:
                 x_cur = x_df
 
     return x_cur.detach(), total_steps
@@ -260,7 +264,7 @@ def sparsefool(
     deepfool_steps: int = 20,
     overshoot: float = 0.02,
     max_classes: int = 10,
-    clip_bounds: tuple[float, float] | None = None,
+    clip_bounds: tuple[Any, Any] | None = None,
 ) -> AttackResult:
     """Run SparseFool (Modas et al., CVPR 2019) to find sparse L0 adversarial examples."""
     if max_iter < 1:
@@ -278,7 +282,7 @@ def sparsefool(
 
     with eval_mode(model_or_fn):
         with torch.no_grad():
-            clean_preds = model_or_fn(x_clean).argmax(dim=1)
+            clean_preds = predict_labels(model_or_fn(x_clean))
 
         for idx in range(batch_size):
             if y is not None and int(clean_preds[idx].item()) != int(y[idx].item()):

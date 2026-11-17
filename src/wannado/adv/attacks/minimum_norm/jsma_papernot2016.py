@@ -33,14 +33,18 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from typing import Any
 
 import torch
 
 from wannado.adv.core import (
     AttackMeta,
     AttackResult,
+    coerce_clip_bounds,
     compute_perturbation_norm,
     eval_mode,
+    normalize_classification_logits,
+    predict_labels,
 )
 from wannado.adv.core.projections import within_eps_budget
 from wannado.adv.core.types import AttackCitation
@@ -97,7 +101,7 @@ def _jsma_single_sample(
     orig_label: int,
     theta: float,
     max_iters: int,
-    clip_bounds: tuple[float, float] | None,
+    clip_bounds: tuple[Any, Any] | None,
 ) -> tuple[torch.Tensor, int]:
     """Run greedy JSMA coordinate saliency updates on one sample ``(1, ...)``."""
     x_adv = x_single.clone()
@@ -111,8 +115,8 @@ def _jsma_single_sample(
         steps_taken = step + 1
 
         x_in = x_adv.detach().requires_grad_(True)
-        logits = model_or_fn(x_in)
-        pred = int(logits.argmax(dim=1)[0].item())
+        logits = normalize_classification_logits(model_or_fn(x_in))
+        pred = int(predict_labels(logits)[0].item())
         if (targeted and pred == target_cls) or ((not targeted) and pred != orig_label):
             break
 
@@ -148,12 +152,14 @@ def _jsma_single_sample(
         flat_adv = x_adv.reshape(-1)
         new_val = float(flat_adv[best_idx].item()) + theta
         if clip_bounds is not None:
-            low, high = clip_bounds
+            lo_t, hi_t = coerce_clip_bounds(clip_bounds, x_single)
+            low = float(lo_t.reshape(-1)[best_idx].item()) if lo_t.ndim > 0 else float(lo_t.item())
+            high = float(hi_t.reshape(-1)[best_idx].item()) if hi_t.ndim > 0 else float(hi_t.item())
             if new_val <= low:
-                new_val = float(low)
+                new_val = low
                 active_mask[best_idx] = False
             elif new_val >= high:
-                new_val = float(high)
+                new_val = high
                 active_mask[best_idx] = False
         flat_adv[best_idx] = new_val
         x_adv = flat_adv.reshape_as(x_single)
@@ -170,7 +176,7 @@ def jsma(
     theta: float = 0.25,
     gamma: float = 0.5,
     targeted: bool = True,
-    clip_bounds: tuple[float, float] | None = None,
+    clip_bounds: tuple[Any, Any] | None = None,
 ) -> AttackResult:
     """Run Jacobian-based Saliency Map Attack (JSMA)."""
     if x.is_complex():
@@ -190,7 +196,7 @@ def jsma(
 
     with eval_mode(model_or_fn):
         with torch.no_grad():
-            clean_logits = model_or_fn(x_clean)
+            clean_logits = normalize_classification_logits(model_or_fn(x_clean))
             clean_preds = clean_logits.argmax(dim=1)
             sorted_classes = clean_logits.argsort(dim=1, descending=True)
 

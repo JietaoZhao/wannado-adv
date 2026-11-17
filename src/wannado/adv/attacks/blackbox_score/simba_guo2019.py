@@ -41,6 +41,7 @@ from wannado.adv.core import (
     AttackResult,
     eval_mode,
     make_generator,
+    normalize_classification_logits,
     project_perturbation,
     resolve_eps_budget,
     resolve_loss_fn,
@@ -102,7 +103,7 @@ def _simba_score(
     loss_fn: LossFn,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return continuous attack score (higher = stronger attack) and fooled mask."""
-    logits = model_or_fn(x_in)
+    logits = normalize_classification_logits(model_or_fn(x_in))
     preds = logits.argmax(dim=1)
     fooled = (preds == y) if targeted else (preds != y)
 
@@ -128,8 +129,11 @@ def simba(
     targeted: bool = False,
     clip_bounds: tuple[float, float] | None = None,
     seed: int | None = None,
+    steps: int | None = None,
 ) -> AttackResult:
     """Run Simple Black-box Attack (SimBA) probing random orthogonal directions."""
+    if steps is not None and max_queries == 600:
+        max_queries = int(steps)
     if max_queries < 1:
         raise ValueError(f"max_queries must be >= 1, got {max_queries}.")
 

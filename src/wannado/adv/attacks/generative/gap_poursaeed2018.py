@@ -43,6 +43,7 @@ from torch import nn
 from wannado.adv.core import (
     AttackMeta,
     AttackResult,
+    clamp_to_bounds,
     compute_attack_objective,
     eval_mode,
     make_generator,
@@ -300,9 +301,7 @@ def gap(
                 raw_out = _unpack_from_real(gen_net(x_packed), x_clean)
                 delta = _smooth_budget_delta(raw_out, eps_budget, norm=norm)
 
-            x_adv_train = x_clean + delta
-            if clip_bounds is not None:
-                x_adv_train = torch.clamp(x_adv_train, min=clip_bounds[0], max=clip_bounds[1])
+            x_adv_train = clamp_to_bounds(x_clean + delta, clip_bounds)
 
             obj = compute_attack_objective(
                 model_or_fn, x_adv_train, y, loss_fn, targeted=targeted

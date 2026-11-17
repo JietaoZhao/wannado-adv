@@ -35,15 +35,19 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from typing import Any
 
 import torch
 
 from wannado.adv.core import (
     AttackMeta,
     AttackResult,
+    clamp_to_bounds,
+    coerce_clip_bounds,
     compute_perturbation_norm,
     eval_mode,
     make_generator,
+    predict_labels,
     safe_l2_norm,
 )
 from wannado.adv.core.projections import within_eps_budget
@@ -96,12 +100,7 @@ def _hard_decisions(
     z: torch.Tensor,
 ) -> tuple[torch.Tensor, int]:
     """Query ONLY predicted class indices regardless of whether oracle returns logits or class IDs."""
-    out = model_or_fn(z)
-    if out.ndim >= 2:
-        preds = out.argmax(dim=-1).reshape(-1).to(torch.long)
-    else:
-        preds = out.reshape(-1).to(torch.long)
-    return preds, int(z.shape[0])
+    return predict_labels(model_or_fn(z)), int(z.shape[0])
 
 
 def _is_adv(preds: torch.Tensor, ref_label: torch.Tensor, targeted: bool) -> torch.Tensor:
@@ -132,13 +131,16 @@ def boundary(
     source_step: float = 0.05,
     step_adaptation: float = 1.5,
     targeted: bool = False,
-    clip_bounds: tuple[float, float] | None = None,
+    clip_bounds: tuple[Any, Any] | None = None,
     x_init: torch.Tensor | None = None,
+    max_queries: int | None = None,
     seed: int | None = None,
 ) -> AttackResult:
     """Run Boundary Attack (Brendel et al., ICLR 2018) on a hard-label oracle."""
     if steps < 1:
         raise ValueError(f"steps must be >= 1, got {steps}.")
+    if max_queries is not None and max_queries < 1:
+        raise ValueError(f"max_queries must be >= 1, got {max_queries}.")
     if clip_bounds is not None and x.is_complex():
         raise ValueError("clip_bounds is only supported for real-valued tensors.")
 
@@ -156,6 +158,8 @@ def boundary(
         x_adv = x_clean.clone()
 
         for idx in range(batch_size):
+            if max_queries is not None and queries >= max_queries:
+                break
             x_i = x_clean[idx : idx + 1]
             label_i = ref_y[idx : idx + 1]
             if _is_adv(clean_preds[idx : idx + 1], label_i, targeted).item():
@@ -164,9 +168,7 @@ def boundary(
             # Step 1: Locate an initial adversarial starting point.
             adv_cur: torch.Tensor | None = None
             if x_init is not None:
-                cand = x_init[idx : idx + 1].detach()
-                if clip_bounds is not None:
-                    cand = cand.clamp(min=clip_bounds[0], max=clip_bounds[1])
+                cand = clamp_to_bounds(x_init[idx : idx + 1].detach(), clip_bounds)
                 p, q = _hard_decisions(model_or_fn, cand)
                 queries += q
                 if _is_adv(p, label_i, targeted).item():
@@ -194,10 +196,13 @@ def boundary(
             if adv_cur is None:
                 # Random perturbation search over increasing scales.
                 base_scale = float(max(x_i.abs().mean().item(), 1.0))
+                lo_hi = coerce_clip_bounds(clip_bounds, x_i) if clip_bounds is not None else None
                 for mult in (0.5, 1.0, 2.0, 5.0, 10.0):
                     for _ in range(15):
-                        if clip_bounds is not None:
-                            lo_c, hi_c = clip_bounds
+                        if max_queries is not None and queries >= max_queries:
+                            break
+                        if lo_hi is not None:
+                            lo_c, hi_c = lo_hi
                             cand = (
                                 torch.rand(
                                     x_i.shape,
@@ -215,7 +220,7 @@ def boundary(
                         if _is_adv(p, label_i, targeted).item():
                             adv_cur = cand
                             break
-                    if adv_cur is not None:
+                    if adv_cur is not None or (max_queries is not None and queries >= max_queries):
                         break
 
             if adv_cur is None:
@@ -224,6 +229,8 @@ def boundary(
             # Binary search along segment [x_i, adv_cur] to land tightly on the boundary.
             lo_b, hi_b = 0.0, 1.0
             for _ in range(10):
+                if max_queries is not None and queries >= max_queries:
+                    break
                 mid_b = 0.5 * (lo_b + hi_b)
                 mid_x = (1.0 - mid_b) * x_i + mid_b * adv_cur
                 p, q = _hard_decisions(model_or_fn, mid_x)
@@ -241,6 +248,8 @@ def boundary(
             orth_trials = 0
 
             for step_idx in range(steps):
+                if max_queries is not None and queries >= max_queries:
+                    break
                 unpert = adv_cur - x_i
                 dist_cur = float(safe_l2_norm(unpert.reshape(-1), dim=None).item())
                 if dist_cur <= 1e-8:
@@ -261,16 +270,12 @@ def boundary(
 
                 # Move along sphere of radius dist_cur, then re-normalize distance to dist_cur.
                 # [AI-Prompt Hook]: Replace Gaussian `noise_orth` with Perlin/DCT basis for faster CV walk.
-                cand_sph = adv_cur + (sph_step * dist_cur) * noise_orth
-                if clip_bounds is not None:
-                    cand_sph = cand_sph.clamp(min=clip_bounds[0], max=clip_bounds[1])
+                cand_sph = clamp_to_bounds(adv_cur + (sph_step * dist_cur) * noise_orth, clip_bounds)
                 cand_delta = cand_sph - x_i
                 cand_delta = cand_delta * (
                     dist_cur / max(float(safe_l2_norm(cand_delta.reshape(-1), dim=None).item()), 1e-12)
                 )
-                cand_sph = x_i + cand_delta
-                if clip_bounds is not None:
-                    cand_sph = cand_sph.clamp(min=clip_bounds[0], max=clip_bounds[1])
+                cand_sph = clamp_to_bounds(x_i + cand_delta, clip_bounds)
 
                 p_sph, q = _hard_decisions(model_or_fn, cand_sph)
                 queries += q
@@ -278,9 +283,7 @@ def boundary(
                 if _is_adv(p_sph, label_i, targeted).item():
                     orth_successes += 1
                     # Try inward step toward clean x_i along the accepted sphere candidate.
-                    cand_in = (1.0 - src_step) * cand_sph + src_step * x_i
-                    if clip_bounds is not None:
-                        cand_in = cand_in.clamp(min=clip_bounds[0], max=clip_bounds[1])
+                    cand_in = clamp_to_bounds((1.0 - src_step) * cand_sph + src_step * x_i, clip_bounds)
                     p_in, q = _hard_decisions(model_or_fn, cand_in)
                     queries += q
                     if _is_adv(p_in, label_i, targeted).item():

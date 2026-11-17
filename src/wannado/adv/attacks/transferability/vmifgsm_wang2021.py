@@ -35,6 +35,7 @@ import torch
 from wannado.adv.core import (
     AttackMeta,
     AttackResult,
+    clamp_to_bounds,
     compute_attack_objective,
     eval_mode,
     make_generator,
@@ -211,9 +212,7 @@ def vmi_fgsm(
                 global_grad = torch.zeros_like(grad)
                 for _ in range(num_variance_samples):
                     offset = _sample_neighbor_offset(x_clean, nbr_radius, norm=norm, generator=generator)
-                    x_nbr = (x_clean + delta + offset).detach()
-                    if clip_bounds is not None:
-                        x_nbr = x_nbr.clamp(min=clip_bounds[0], max=clip_bounds[1])
+                    x_nbr = clamp_to_bounds(x_clean + delta + offset, clip_bounds).detach()
                     x_nbr = x_nbr.requires_grad_(True)
                     obj_n = compute_attack_objective(
                         model_or_fn, x_nbr, y, loss_fn, targeted=targeted

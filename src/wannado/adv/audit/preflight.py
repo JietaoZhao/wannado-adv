@@ -15,9 +15,28 @@ import torch
 from torch import nn
 
 from wannado.adv.catalog.build_catalog import load_catalog
-from wannado.adv.core.losses import resolve_loss_fn
-from wannado.adv.core.projections import SUPPORTED_NORMS, resolve_eps_budget, safe_l2_norm
+from wannado.adv.core.losses import resolve_loss_fn, unwrap_model_outputs
+from wannado.adv.core.projections import (
+    SUPPORTED_NORMS,
+    coerce_clip_bounds,
+    resolve_eps_budget,
+    safe_l2_norm,
+)
 from wannado.adv.core.utils import eval_mode
+
+
+def _serialize_bounds(bounds: Any) -> Any:
+    if bounds is None:
+        return None
+    out: list[Any] = []
+    for val in bounds:
+        if isinstance(val, torch.Tensor):
+            out.append(val.detach().cpu().tolist())
+        elif hasattr(val, "tolist"):
+            out.append(val.tolist())
+        else:
+            out.append(float(val))
+    return out
 
 
 @dataclass
@@ -98,7 +117,7 @@ def _probe_gradients(
     with eval_mode(model_or_fn):
         x_in = x_probe.detach().requires_grad_(True)
         try:
-            outputs = model_or_fn(x_in)
+            outputs = unwrap_model_outputs(model_or_fn(x_in))
         except Exception as exc:  # noqa: BLE001 — surface any user model failure in preflight report
             result["error"] = f"Forward pass failed during preflight: {type(exc).__name__}: {exc}"
             return result
@@ -125,7 +144,15 @@ def _probe_gradients(
         if scalar_vec.is_complex():
             scalar_vec = scalar_vec.real
 
-        will_probe_margin = y_probe is not None and outputs.ndim == 2 and (loss_name in (None, "ce"))
+        is_cls_target = y_probe is not None and y_probe.dtype in (
+            torch.int64,
+            torch.int32,
+            torch.int16,
+            torch.int8,
+            torch.uint8,
+            torch.long,
+        )
+        will_probe_margin = is_cls_target and outputs.ndim >= 1 and (loss_name in (None, "ce"))
         try:
             (grad,) = torch.autograd.grad(
                 scalar_vec.sum(),
@@ -170,7 +197,7 @@ def preflight(
     *,
     eps: float = 0.03,
     norm: str = "linf",
-    clip_bounds: tuple[float, float] | None = None,
+    clip_bounds: tuple[Any, Any] | None = None,
     attack: str | None = None,
     loss: str | None = "ce",
     check_gradients: bool = True,
@@ -208,8 +235,22 @@ def preflight(
             "device": str(x.device),
             "is_complex": bool(x.is_complex()),
         },
-        "budget": {"eps": float(eps), "norm": norm, "clip_bounds": clip_bounds},
+        "budget": {
+            "eps": float(eps),
+            "norm": norm,
+            "clip_bounds": _serialize_bounds(clip_bounds),
+        },
     }
+
+    if not callable(model_or_fn):
+        cls_name = type(model_or_fn).__name__
+        errors.append(
+            f"model_or_fn ({cls_name}) is not directly callable on PyTorch tensors."
+        )
+        recommendations.append(
+            "For scikit-learn estimators, wrap with wrap_sklearn_model(estimator) "
+            "and use black-box attacks (square_attack, nes, spsa, hopskipjump, boundary)."
+        )
 
     if module_info["was_training"]:
         layer_note = []
@@ -248,16 +289,16 @@ def preflight(
         )
         recommendations.append("Use clip_bounds=None and norm='jsr_db' for complex IQ signals.")
     elif clip_bounds is not None:
-        low, high = clip_bounds
-        if low > high:
-            errors.append(f"Invalid clip_bounds={clip_bounds}: min > max.")
-        elif x_finite:
-            x_min = float(x.min().item())
-            x_max = float(x.max().item())
-            if x_min < low - 1e-5 or x_max > high + 1e-5:
+        try:
+            lo_t, hi_t = coerce_clip_bounds(clip_bounds, x)
+            if x_finite and bool(((x < lo_t - 1e-5) | (x > hi_t + 1e-5)).any().item()):
+                x_min = float(x.min().item())
+                x_max = float(x.max().item())
                 warnings.append(
-                    f"Clean input values range [{x_min:.4g}, {x_max:.4g}], exceeding clip_bounds={clip_bounds}."
+                    f"Clean input values range [{x_min:.4g}, {x_max:.4g}], exceeding supplied clip_bounds."
                 )
+        except ValueError as exc:
+            errors.append(str(exc))
     elif not x.is_complex() and x_finite:
         x_min = float(x.min().item())
         x_max = float(x.max().item())

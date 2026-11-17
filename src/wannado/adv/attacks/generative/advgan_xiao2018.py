@@ -50,6 +50,7 @@ from wannado.adv.attacks.minimum_norm.cw_l2_carlini2017 import _cw_margin_object
 from wannado.adv.core import (
     AttackMeta,
     AttackResult,
+    clamp_to_bounds,
     compute_attack_objective,
     eval_mode,
     make_generator,
@@ -231,9 +232,7 @@ def advgan(
                 delta_d = _smooth_budget_delta(
                     _unpack_from_real(gen_net(x_packed), x_clean), eps_budget, norm=norm
                 )
-                x_fake_d = x_clean + delta_d
-                if clip_bounds is not None:
-                    x_fake_d = torch.clamp(x_fake_d, min=clip_bounds[0], max=clip_bounds[1])
+                x_fake_d = clamp_to_bounds(x_clean + delta_d, clip_bounds)
                 x_fake_packed = _pack_to_real(x_fake_d)
 
             opt_d.zero_grad()
@@ -252,9 +251,7 @@ def advgan(
             opt_g.zero_grad()
             raw_g = _unpack_from_real(gen_net(x_packed), x_clean)
             delta_g = _smooth_budget_delta(raw_g, eps_budget, norm=norm)
-            x_adv_g = x_clean + delta_g
-            if clip_bounds is not None:
-                x_adv_g = torch.clamp(x_adv_g, min=clip_bounds[0], max=clip_bounds[1])
+            x_adv_g = clamp_to_bounds(x_clean + delta_g, clip_bounds)
 
             if custom_loss_fn is None:
                 logits_v = model_or_fn(x_adv_g)

@@ -41,11 +41,13 @@ from wannado.adv.core import (
     eval_mode,
     make_generator,
     outputs_to_objective,
+    predict_labels,
     project_perturbation,
     random_init_perturbation,
     resolve_eps_budget,
     resolve_loss_fn,
     safe_l2_norm,
+    unwrap_model_outputs,
 )
 from wannado.adv.core.losses import LossFn
 from wannado.adv.core.types import AttackCitation
@@ -315,6 +317,7 @@ def square_attack(
     early_stop: bool = True,
     clip_bounds: tuple[float, float] | None = None,
     seed: int | None = None,
+    steps: int | None = None,
 ) -> AttackResult:
     """Run Square Attack score-based black-box random search.
 
@@ -335,6 +338,8 @@ def square_attack(
     Returns:
         ``AttackResult`` containing adversarial perturbations and query usage stats.
     """
+    if steps is not None and max_queries == 500:
+        max_queries = int(steps)
     if max_queries < 1:
         raise ValueError(f"max_queries must be >= 1, got {max_queries}.")
     if not 0.0 < p_init <= 1.0:
@@ -367,12 +372,12 @@ def square_attack(
         best_delta = _init_square_perturbation(
             x_clean, eps_budget, norm=norm, clip_bounds=clip_bounds, generator=generator
         )
-        outputs_init = model_or_fn(x_clean + best_delta)
+        outputs_init = unwrap_model_outputs(model_or_fn(x_clean + best_delta))
         best_obj = outputs_to_objective(outputs_init, y, loss_fn, targeted=targeted)
         queries_per_sample += 1
 
-        if can_check_class_stop and outputs_init.ndim == 2:
-            preds_init = outputs_init.argmax(dim=1)
+        if can_check_class_stop and outputs_init.ndim >= 1:
+            preds_init = predict_labels(outputs_init)
             active = preds_init != y if targeted else preds_init == y
         else:
             active = torch.ones(batch_size, device=x_clean.device, dtype=torch.bool)
@@ -393,7 +398,7 @@ def square_attack(
                 clip_bounds=clip_bounds,
                 generator=generator,
             )
-            outputs_cand = model_or_fn(x_clean[active_idx] + cand_delta)
+            outputs_cand = unwrap_model_outputs(model_or_fn(x_clean[active_idx] + cand_delta))
             cand_obj = outputs_to_objective(
                 outputs_cand, y[active_idx], loss_fn, targeted=targeted
             )
@@ -405,8 +410,8 @@ def square_attack(
                 best_obj[imp_idx] = cand_obj[improved]
                 best_delta[imp_idx] = cand_delta[improved]
 
-            if can_check_class_stop and outputs_cand.ndim == 2:
-                preds_cand = outputs_cand.argmax(dim=1)
+            if can_check_class_stop and outputs_cand.ndim >= 1:
+                preds_cand = predict_labels(outputs_cand)
                 solved = preds_cand == y[active_idx] if targeted else preds_cand != y[active_idx]
                 if solved.any():
                     active[active_idx[solved]] = False

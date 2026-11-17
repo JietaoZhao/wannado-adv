@@ -40,6 +40,8 @@ import torch
 from wannado.adv.core import (
     AttackMeta,
     AttackResult,
+    clamp_to_bounds,
+    coerce_clip_bounds,
     eval_mode,
     make_generator,
     project_perturbation,
@@ -200,7 +202,8 @@ def adv_patch(
     patch = torch.zeros(patch_shape, device=x_clean.device, dtype=x_clean.dtype)
 
     if clip_bounds is not None and eps_budget is None:
-        mid = 0.5 * (clip_bounds[0] + clip_bounds[1])
+        lo_t, hi_t = coerce_clip_bounds(clip_bounds, x_clean)
+        mid = 0.5 * (lo_t + hi_t)
         patch = patch + mid
 
     best_obj_mean = float("-inf")
@@ -213,9 +216,7 @@ def adv_patch(
         m = mask_t.to(dtype=x_in.dtype)
         # In Brown et al., patch replaces masked region (or adds masked delta when eps is bounded).
         x_out = (x_in + m * patch_t) if eps_budget is not None else ((1.0 - m) * x_in + m * patch_t)
-        if clip_bounds is not None:
-            x_out = x_out.clamp(min=clip_bounds[0], max=clip_bounds[1])
-        return x_out
+        return clamp_to_bounds(x_out, clip_bounds)
 
     mom = torch.zeros_like(patch)
     use_eot = random_location and universal
@@ -301,7 +302,7 @@ def adv_patch(
                     clip_bounds=None,
                 )
             elif clip_bounds is not None:
-                updated_patch = updated_patch.clamp(min=clip_bounds[0], max=clip_bounds[1])
+                updated_patch = clamp_to_bounds(updated_patch, clip_bounds)
 
             patch = updated_patch
 

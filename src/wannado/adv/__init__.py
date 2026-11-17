@@ -6,11 +6,25 @@ only loads that standalone implementation without importing the rest of the cata
 
 from __future__ import annotations
 
+import importlib
 from typing import Any
 
 from wannado.adv.attacks import ATTACK_EXPORTS, lazy_resolve
 
-__version__ = "1.0.4"
+__version__ = "1.0.5"
+
+_SUBMODULES = frozenset(
+    {
+        "agent_kit",
+        "attacks",
+        "audit",
+        "catalog",
+        "copilot",
+        "core",
+        "reporter",
+        "workspace",
+    }
+)
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     **ATTACK_EXPORTS,
@@ -49,9 +63,18 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     # Core primitives
     "AttackMeta": ("wannado.adv.core.types", "AttackMeta"),
     "AttackResult": ("wannado.adv.core.types", "AttackResult"),
+    "SklearnModelAdapter": ("wannado.adv.core.utils", "SklearnModelAdapter"),
+    "clamp_to_bounds": ("wannado.adv.core.projections", "clamp_to_bounds"),
+    "coerce_clip_bounds": ("wannado.adv.core.projections", "coerce_clip_bounds"),
     "compute_perturbation_norm": ("wannado.adv.core.projections", "compute_perturbation_norm"),
+    "normalize_classification_logits": ("wannado.adv.core.losses", "normalize_classification_logits"),
+    "predict_labels": ("wannado.adv.core.losses", "predict_labels"),
+    "project_discrete_features": ("wannado.adv.core.projections", "project_discrete_features"),
     "project_perturbation": ("wannado.adv.core.projections", "project_perturbation"),
+    "random_init_perturbation": ("wannado.adv.core.projections", "random_init_perturbation"),
     "resolve_eps_budget": ("wannado.adv.core.projections", "resolve_eps_budget"),
+    "unwrap_model_outputs": ("wannado.adv.core.losses", "unwrap_model_outputs"),
+    "wrap_sklearn_model": ("wannado.adv.core.utils", "wrap_sklearn_model"),
 }
 
 __all__ = [
@@ -65,6 +88,7 @@ __all__ = [
     "ProjectScan",
     "RecommendedSuite",
     "RuntimeEstimate",
+    "SklearnModelAdapter",
     "VictimInterface",
     "__version__",
     "adam_pgd",
@@ -82,6 +106,8 @@ __all__ = [
     "bpda_eot",
     "build_interactive_brief",
     "build_registry_json",
+    "clamp_to_bounds",
+    "coerce_clip_bounds",
     "compute_perturbation_norm",
     "cw_l2",
     "deepfool",
@@ -108,11 +134,15 @@ __all__ = [
     "nes",
     "ni_fgsm",
     "nifgsm",
+    "normalize_classification_logits",
     "pgd",
+    "predict_labels",
     "preflight",
     "probe_model_context",
+    "project_discrete_features",
     "project_perturbation",
     "query_catalog",
+    "random_init_perturbation",
     "recommend_suite",
     "resolve_eps_budget",
     "rfgsm",
@@ -129,13 +159,19 @@ __all__ = [
     "tifgsm",
     "tpgd",
     "uap",
+    "unwrap_model_outputs",
     "vmi_fgsm",
     "vmifgsm",
+    "wrap_sklearn_model",
     "zoo",
 ]
 
 
 def __getattr__(name: str) -> Any:
+    if name in _SUBMODULES:
+        module = importlib.import_module(f"{__name__}.{name}")
+        globals()[name] = module
+        return module
     return lazy_resolve(name, _LAZY_EXPORTS, globals(), __name__)
 
 

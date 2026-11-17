@@ -39,6 +39,7 @@ import torch
 from wannado.adv.core import (
     AttackMeta,
     AttackResult,
+    clamp_to_bounds,
     compute_attack_objective,
     eval_mode,
     make_generator,
@@ -141,8 +142,8 @@ def _estimate_nes_gradient(
     x_plus = x_adv.unsqueeze(0) + sigma * u
     x_minus = x_adv.unsqueeze(0) - sigma * u
     if clip_bounds is not None:
-        x_plus = x_plus.clamp(min=clip_bounds[0], max=clip_bounds[1])
-        x_minus = x_minus.clamp(min=clip_bounds[0], max=clip_bounds[1])
+        x_plus = clamp_to_bounds(x_plus, clip_bounds)
+        x_minus = clamp_to_bounds(x_minus, clip_bounds)
 
     all_probes = torch.cat(
         [x_plus.reshape(-1, *x_adv.shape[1:]), x_minus.reshape(-1, *x_adv.shape[1:])],

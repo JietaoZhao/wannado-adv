@@ -18,6 +18,7 @@ from typing import Any
 import torch
 
 from wannado.adv.audit.preflight import preflight
+from wannado.adv.core.losses import unwrap_model_outputs
 
 _IGNORE_DIRS = {
     ".git",
@@ -113,6 +114,46 @@ _DOMAIN_KEYWORDS: dict[str, tuple[str, ...]] = {
         "reconstruction_loss",
         "latent",
     ),
+    "medical": (
+        "monai",
+        "nibabel",
+        "pydicom",
+        "simpleitk",
+        "ct_scan",
+        "hounsfield",
+        "radiology",
+        "ecg",
+        "eeg",
+        "clinical",
+        "sepsis",
+        "dice_loss",
+        "unet",
+    ),
+    "cybersecurity": (
+        "cicids",
+        "nsl_kdd",
+        "nsl-kdd",
+        "intrusion",
+        "malware",
+        "pcap",
+        "botnet",
+        "phishing",
+        "netflow",
+        "mitre",
+        "anomaly_detection",
+    ),
+    "nlp_transformers": (
+        "transformers",
+        "autotokenizer",
+        "automodel",
+        "huggingface",
+        "bert",
+        "roberta",
+        "token_ids",
+        "attention_mask",
+        "vocab_size",
+        "nlp",
+    ),
 }
 
 
@@ -135,6 +176,8 @@ class ProjectScan:
     checkpoint_files: list[str] = field(default_factory=list)
     normalization_hints: list[str] = field(default_factory=list)
     fingerprint: str = ""
+    readme_summary: str = ""
+    detected_symbols: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize snapshot to JSON-compatible dictionary."""
@@ -148,8 +191,12 @@ class ProjectScan:
             f"  Detected frameworks : {', '.join(self.frameworks) if self.frameworks else 'unknown'}",
             f"  Inferred domain     : {self.likely_domain} (recommended norm='{self.recommended_norm}')",
         ]
+        if self.readme_summary:
+            lines.append(f"  README summary      : {self.readme_summary}")
         if self.model_files:
             lines.append(f"  Candidate models    : {', '.join(self.model_files[:10])}")
+        if self.detected_symbols:
+            lines.append(f"  Detected symbols    : {', '.join(self.detected_symbols[:10])}")
         if self.entry_candidates:
             lines.append(f"  Train/Eval scripts  : {', '.join(self.entry_candidates[:8])}")
         if self.normalization_hints:
@@ -187,11 +234,19 @@ class ModelContextProbe:
     preflight_recommendations: list[str] = field(default_factory=list)
     inferred_domain: str = "vision"
     recommended_norm: str = "linf"
-    recommended_clip_bounds: tuple[float, float] | None = None
+    recommended_clip_bounds: tuple[Any, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize probe results into JSON-safe dictionary."""
-        return asdict(self)
+        data = asdict(self)
+        if self.recommended_clip_bounds is not None:
+            data["recommended_clip_bounds"] = [
+                v.detach().cpu().tolist()
+                if isinstance(v, torch.Tensor)
+                else (v.tolist() if hasattr(v, "tolist") else float(v))
+                for v in self.recommended_clip_bounds
+            ]
+        return data
 
 
 _CHECKPOINT_EXTS = (".pt", ".pth", ".ckpt", ".safetensors")
@@ -260,19 +315,49 @@ def scan_project(project_dir: str | Path = ".", max_files: int = 200) -> Project
     fallback_model_files: list[str] = []
     custom_attack_files: list[str] = []
     normalization_hints: list[str] = []
+    detected_symbols: list[str] = []
+    seen_symbols: set[str] = set()
+    readme_summary = ""
+
+    for readme_name in ("README.md", "README.rst", "README.txt", "readme.md"):
+        readme_path = root / readme_name
+        if readme_path.is_file():
+            try:
+                readme_text = readme_path.read_text(encoding="utf-8", errors="ignore")[:32768]
+                lines_clean = [
+                    ln.strip().lstrip("#").strip()
+                    for ln in readme_text.splitlines()
+                    if ln.strip() and not ln.strip().startswith("![") and not ln.strip().startswith("```")
+                ]
+                if lines_clean:
+                    readme_summary = " — ".join(lines_clean[:2])[:260]
+                lower_rm = readme_text.lower()
+                for domain, kws in _DOMAIN_KEYWORDS.items():
+                    hits = sum(1 for kw in kws if _keyword_matched(kw, lower_rm))
+                    if hits > 0:
+                        domain_scores[domain] += hits
+                        if len(evidence_by_domain[domain]) < 5:
+                            evidence_by_domain[domain].append(readme_name)
+            except OSError:
+                pass
+            break
 
     fw_root_map = {
         "torch": "PyTorch",
         "torchvision": "torchvision",
         "robustbench": "RobustBench",
         "timm": "timm",
+        "transformers": "Transformers",
         "gymnasium": "Gymnasium/Gym",
         "gym": "Gymnasium/Gym",
         "stable_baselines3": "Stable-Baselines3",
         "numpy": "NumPy",
         "scipy": "SciPy",
         "sklearn": "scikit-learn",
+        "xgboost": "XGBoost",
+        "lightgbm": "LightGBM",
         "pandas": "pandas",
+        "monai": "MONAI",
     }
 
     for fpath in py_files:
@@ -303,6 +388,13 @@ def scan_project(project_dir: str | Path = ".", max_files: int = 200) -> Project
                         frameworks.add("wannado-adv")
                     elif top in fw_root_map:
                         frameworks.add(fw_root_map[top])
+                elif isinstance(node, (ast.ClassDef, ast.FunctionDef)) and (
+                    not node.name.startswith("_") and len(detected_symbols) < 25
+                ):
+                    sym = f"{rel}:{node.name}"
+                    if sym not in seen_symbols:
+                        seen_symbols.add(sym)
+                        detected_symbols.append(sym)
         except SyntaxError:
             pass
 
@@ -336,7 +428,7 @@ def scan_project(project_dir: str | Path = ".", max_files: int = 200) -> Project
 
     likely_domain = max(domain_scores.items(), key=lambda item: item[1])[0]
     if domain_scores[likely_domain] == 0:
-        likely_domain = "vision"
+        likely_domain = "general"
 
     norm_map = {
         "wireless": "jsr_db",
@@ -345,6 +437,10 @@ def scan_project(project_dir: str | Path = ".", max_files: int = 200) -> Project
         "tabular": "l2",
         "timeseries": "l2",
         "unsupervised": "l2",
+        "medical": "l2",
+        "cybersecurity": "l2",
+        "nlp_transformers": "l2",
+        "general": "l2",
     }
 
     existing_eval_dirs: list[str] = []
@@ -359,7 +455,7 @@ def scan_project(project_dir: str | Path = ".", max_files: int = 200) -> Project
         frameworks=sorted(frameworks),
         likely_domain=likely_domain,
         domain_scores=domain_scores,
-        recommended_norm=norm_map.get(likely_domain, "linf"),
+        recommended_norm=norm_map.get(likely_domain, "l2"),
         entry_candidates=entry_candidates[:15],
         model_files=selected_models[:15],
         evidence_by_domain={k: v for k, v in evidence_by_domain.items() if v},
@@ -368,6 +464,8 @@ def scan_project(project_dir: str | Path = ".", max_files: int = 200) -> Project
         checkpoint_files=checkpoint_files,
         normalization_hints=normalization_hints[:10],
         fingerprint=_compute_tree_fingerprint(root, py_files),
+        readme_summary=readme_summary,
+        detected_symbols=detected_symbols,
     )
 
 
@@ -378,7 +476,7 @@ def probe_model_context(
     *,
     norm: str | None = None,
     eps: float | None = None,
-    clip_bounds: tuple[float, float] | None = None,
+    clip_bounds: tuple[Any, Any] | None = None,
 ) -> ModelContextProbe:
     """Inspect a live model and sample batch to infer domain, range, norms, and autograd status."""
     is_complex = bool(x.is_complex())
@@ -412,10 +510,10 @@ def probe_model_context(
     )
     grad_info = pf.summary.get("gradient_probe", {})
     out_shape = grad_info.get("outputs_shape")
-    if out_shape is None:
+    if out_shape is None and callable(model_or_fn):
         try:
             with torch.no_grad():
-                out = model_or_fn(x[: min(2, x.shape[0])].detach())
+                out = unwrap_model_outputs(model_or_fn(x[: min(2, x.shape[0])].detach()))
             out_shape = list(out.shape)
         except Exception:  # noqa: BLE001
             out_shape = None
@@ -429,9 +527,10 @@ def probe_model_context(
     else:
         inferred_domain = "tabular"
 
-    if out_shape is not None and len(out_shape) == 2 and y is not None and y.dtype in (torch.int64, torch.long):
+    is_cls_y = y is not None and y.dtype in (torch.int64, torch.int32, torch.long)
+    if out_shape is not None and (len(out_shape) >= 2 or len(out_shape) == 1) and is_cls_y:
         task_kind = "classification"
-    elif out_shape is not None and len(out_shape) == 2 and y is None:
+    elif out_shape is not None and len(out_shape) >= 2 and y is None:
         task_kind = "classification_or_policy"
     else:
         task_kind = "regression_or_latent"

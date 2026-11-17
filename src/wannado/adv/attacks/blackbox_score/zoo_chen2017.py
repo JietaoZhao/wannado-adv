@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -39,9 +40,11 @@ from wannado.adv.attacks.minimum_norm.cw_l2_carlini2017 import _cw_margin_object
 from wannado.adv.core import (
     AttackMeta,
     AttackResult,
+    clamp_to_bounds,
     compute_perturbation_norm,
     eval_mode,
     make_generator,
+    normalize_classification_logits,
     project_perturbation,
     resolve_eps_budget,
 )
@@ -101,7 +104,7 @@ def _eval_zoo_loss(
     use_log_probs: bool,
 ) -> tuple[torch.Tensor, torch.Tensor, int]:
     """Evaluate per-sample ZOO objective ||delta||_2^2 + c * f_CW(outputs) without autograd."""
-    outputs = model_or_fn(x_cand)
+    outputs = normalize_classification_logits(model_or_fn(x_cand))
     scores = F.log_softmax(outputs, dim=1) if use_log_probs else outputs
     f_loss, succeeded = _cw_margin_objective(
         scores, y_rep, confidence=confidence, targeted=targeted
@@ -124,12 +127,15 @@ def zoo(
     confidence: float = 0.0,
     use_log_probs: bool = True,
     targeted: bool = False,
-    clip_bounds: tuple[float, float] | None = None,
+    clip_bounds: tuple[Any, Any] | None = None,
+    max_queries: int | None = None,
     seed: int | None = None,
 ) -> AttackResult:
     """Run Zeroth Order Optimization (ZOO-Adam) score-based black-box attack."""
     if steps < 1:
         raise ValueError(f"steps must be >= 1, got {steps}.")
+    if max_queries is not None and max_queries < 1:
+        raise ValueError(f"max_queries must be >= 1, got {max_queries}.")
     if coord_batch_size < 1:
         raise ValueError(f"coord_batch_size must be >= 1, got {coord_batch_size}.")
     if fd_eps <= 0.0:
@@ -187,10 +193,13 @@ def zoo(
     queries = 0
     best_l2 = torch.full((batch_size,), float("inf"), device=x_clean.device, dtype=real_dtype)
     best_delta = torch.zeros_like(x_clean)
+    delta_cur = torch.zeros_like(x_clean)
     const_vec = torch.full((batch_size,), float(const), device=x_clean.device, dtype=real_dtype)
 
     with eval_mode(model_or_fn), torch.no_grad():
         for _ in range(steps):
+            if max_queries is not None and queries >= max_queries:
+                break
             perm = torch.randperm(eff_dim, device=x_clean.device, generator=generator)[:k_coords]
             eye = torch.zeros((k_coords, eff_dim), device=x_clean.device, dtype=real_dtype)
             eye[torch.arange(k_coords, device=x_clean.device), perm] = fd_eps
@@ -204,11 +213,8 @@ def zoo(
             y_rep = y.unsqueeze(0).expand(k_coords, batch_size).reshape(-1)
             c_rep = const_vec.unsqueeze(0).expand(k_coords, batch_size).reshape(-1)
 
-            x_plus = x_clean_rep + _from_real_flat(plus_flat)
-            x_minus = x_clean_rep + _from_real_flat(minus_flat)
-            if clip_bounds is not None:
-                x_plus = x_plus.clamp(min=clip_bounds[0], max=clip_bounds[1])
-                x_minus = x_minus.clamp(min=clip_bounds[0], max=clip_bounds[1])
+            x_plus = clamp_to_bounds(x_clean_rep + _from_real_flat(plus_flat), clip_bounds)
+            x_minus = clamp_to_bounds(x_clean_rep + _from_real_flat(minus_flat), clip_bounds)
 
             both = torch.cat([x_plus, x_minus], dim=0)
             y_both = torch.cat([y_rep, y_rep], dim=0)
@@ -251,10 +257,10 @@ def zoo(
                     delta_cur, x_clean, eps_budget, norm=norm, clip_bounds=clip_bounds
                 )
             elif clip_bounds is not None:
-                delta_cur = (x_clean + delta_cur).clamp(min=clip_bounds[0], max=clip_bounds[1]) - x_clean
+                delta_cur = clamp_to_bounds(x_clean + delta_cur, clip_bounds) - x_clean
             delta_flat = _to_real_flat(delta_cur)
 
-            logits_cur = model_or_fn(x_clean + delta_cur)
+            logits_cur = normalize_classification_logits(model_or_fn(x_clean + delta_cur))
             queries += batch_size
             scores_cur = F.log_softmax(logits_cur, dim=1) if use_log_probs else logits_cur
             _, succeeded = _cw_margin_objective(

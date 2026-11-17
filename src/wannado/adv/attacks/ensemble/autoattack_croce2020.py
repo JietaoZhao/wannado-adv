@@ -46,6 +46,8 @@ from wannado.adv.core import (
     AttackMeta,
     AttackResult,
     eval_mode,
+    normalize_classification_logits,
+    predict_labels,
     resolve_eps_budget,
 )
 from wannado.adv.core.types import AttackCitation
@@ -124,7 +126,7 @@ def _apply_stage_result(
     """Update ``x_adv`` for surviving samples fooled by the latest stage."""
     surv_idx = torch.nonzero(surviving, as_tuple=False).squeeze(1)
     with torch.no_grad():
-        preds = model_or_fn(stage_x_adv).argmax(dim=1)
+        preds = predict_labels(model_or_fn(stage_x_adv))
     fooled = preds != y[surv_idx]
     if fooled.any():
         fooled_idx = surv_idx[fooled]
@@ -196,7 +198,7 @@ def autoattack(
 
     with eval_mode(model_or_fn):
         with torch.no_grad():
-            clean_logits = model_or_fn(x_clean)
+            clean_logits = normalize_classification_logits(model_or_fn(x_clean))
             if clean_logits.ndim != 2:
                 raise ValueError(
                     f"autoattack requires 2D classification logits (B, C), got shape {tuple(clean_logits.shape)}."

@@ -38,6 +38,7 @@ from wannado.adv.core import (
     AttackMeta,
     AttackResult,
     adam_step_direction,
+    clamp_to_bounds,
     compute_attack_objective,
     eval_mode,
     make_generator,
@@ -149,8 +150,8 @@ def _estimate_spsa_gradient(
     x_plus = x_adv.unsqueeze(0) + spsa_delta * probes
     x_minus = x_adv.unsqueeze(0) - spsa_delta * probes
     if clip_bounds is not None:
-        x_plus = torch.clamp(x_plus, min=clip_bounds[0], max=clip_bounds[1])
-        x_minus = torch.clamp(x_minus, min=clip_bounds[0], max=clip_bounds[1])
+        x_plus = clamp_to_bounds(x_plus, clip_bounds)
+        x_minus = clamp_to_bounds(x_minus, clip_bounds)
 
     flat_plus = x_plus.reshape(nb_sample * batch_size, *x_adv.shape[1:])
     flat_minus = x_minus.reshape(nb_sample * batch_size, *x_adv.shape[1:])

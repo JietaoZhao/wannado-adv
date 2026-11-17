@@ -40,6 +40,7 @@ from wannado.adv.core import (
     AttackResult,
     eval_mode,
     make_generator,
+    normalize_classification_logits,
     project_perturbation,
     random_init_perturbation,
     resolve_eps_budget,
@@ -139,7 +140,7 @@ def tpgd(
 
     with eval_mode(model_or_fn):
         with torch.no_grad():
-            clean_probs = F.softmax(model_or_fn(x_clean).detach(), dim=-1)
+            clean_probs = F.softmax(normalize_classification_logits(model_or_fn(x_clean)).detach(), dim=1)
 
         if random_start:
             if jitter_std > 0.0 and not x_clean.is_complex():
@@ -169,10 +170,10 @@ def tpgd(
 
         for _ in range(steps):
             x_in = (x_clean + delta).detach().requires_grad_(True)
-            adv_log_probs = F.log_softmax(model_or_fn(x_in), dim=-1)
+            adv_log_probs = F.log_softmax(normalize_classification_logits(model_or_fn(x_in)), dim=1)
             # [AI-Prompt Hook]: Zhang et al. (2019) TRADES Eq. (3) KL(p_clean || p_adv).
             # Swap `F.kl_div` for MSE/cosine distance between latent representations for SSL attacks.
-            kl_per_sample = F.kl_div(adv_log_probs, clean_probs, reduction="none").sum(dim=-1)
+            kl_per_sample = F.kl_div(adv_log_probs, clean_probs, reduction="none").reshape(x_clean.shape[0], -1).sum(dim=1)
             (grad,) = torch.autograd.grad(kl_per_sample.sum(), x_in, only_inputs=True)
 
             best_delta, best_kl = update_best_by_objective(
@@ -184,8 +185,8 @@ def tpgd(
             )
 
         with torch.no_grad():
-            final_log_probs = F.log_softmax(model_or_fn(x_clean + delta), dim=-1)
-            final_kl = F.kl_div(final_log_probs, clean_probs, reduction="none").sum(dim=-1)
+            final_log_probs = F.log_softmax(normalize_classification_logits(model_or_fn(x_clean + delta)), dim=1)
+            final_kl = F.kl_div(final_log_probs, clean_probs, reduction="none").reshape(x_clean.shape[0], -1).sum(dim=1)
             best_delta, best_kl = update_best_by_objective(best_delta, best_kl, delta, final_kl)
 
     return AttackResult(

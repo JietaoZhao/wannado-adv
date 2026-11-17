@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -10,50 +11,97 @@ import torch.nn.functional as F
 LossFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 
+def unwrap_model_outputs(outputs: Any) -> torch.Tensor:
+    """Extract raw tensor from standard tensors, HuggingFace ModelOutput (``.logits``), or tuple outputs."""
+    if isinstance(outputs, torch.Tensor):
+        return outputs
+    if hasattr(outputs, "logits"):
+        return unwrap_model_outputs(outputs.logits)
+    if isinstance(outputs, (tuple, list)) and outputs:
+        return unwrap_model_outputs(outputs[0])
+    return torch.as_tensor(outputs)
+
+
+def normalize_classification_logits(outputs: Any) -> torch.Tensor:
+    """Normalize binary single-logit ``(B, 1)`` / ``(B,)`` or HF ``.logits`` into ``(B, C>=2)`` or ``(B, C>=2, H, W)``."""
+    logits = unwrap_model_outputs(outputs)
+    if logits.ndim == 1:
+        z = logits.unsqueeze(1)
+        return torch.cat([-0.5 * z, 0.5 * z], dim=1)
+    if logits.ndim >= 2 and logits.shape[1] == 1:
+        return torch.cat([-0.5 * logits, 0.5 * logits], dim=1)
+    return logits
+
+
+def predict_labels(outputs: Any) -> torch.Tensor:
+    """Extract predicted integer class IDs uniformly for multi-class, single-logit binary, segmentation, or label-only oracles."""
+    out = unwrap_model_outputs(outputs)
+    if out.dtype in (torch.int64, torch.int32, torch.int16, torch.int8, torch.uint8, torch.bool):
+        return out.reshape(out.shape[0], -1)[:, 0].to(torch.long) if out.ndim >= 2 else out.reshape(-1).to(torch.long)
+    norm_logits = normalize_classification_logits(out)
+    return norm_logits.argmax(dim=1).to(torch.long)
+
+
+def _flatten_dense_logits(logits: torch.Tensor, y: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, int, bool]:
+    """Flatten ``(B, C)`` or ``(B, C, H, W)`` logits and targets cleanly for margin/DLR losses."""
+    norm = normalize_classification_logits(logits)
+    batch_size = norm.shape[0]
+    if norm.ndim == 2:
+        return norm, y.reshape(-1).to(torch.long), batch_size, False
+    if norm.ndim >= 3:
+        c = norm.shape[1]
+        perm = norm.permute(0, *range(2, norm.ndim), 1).reshape(-1, c)
+        return perm, y.reshape(-1).to(torch.long), batch_size, True
+    raise ValueError(f"Expected classification logits with ndim >= 1, got shape {tuple(norm.shape)}.")
+
+
 def _margin_loss(logits: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     """Per-sample classification margin loss: max_{j != y} z_j - z_y.
 
-    Negative when class ``y`` is predicted with margin; positive once fooled.
+    Supports ``(B, C)`` multi-class, single-logit binary ``(B, 1)`` / ``(B,)``, HuggingFace ``.logits``,
+    and dense spatial segmentation ``(B, C, H, W)``. Negative when predicted correctly; positive once fooled.
     """
-    if logits.ndim != 2:
-        raise ValueError(f"Margin loss expects 2D logits (B, C), got shape {tuple(logits.shape)}.")
-    batch_idx = torch.arange(logits.shape[0], device=logits.device)
-    correct_logit = logits[batch_idx, y]
-    masked = logits.clone()
-    masked[batch_idx, y] = float("-inf")
+    flat_logits, flat_y, batch_size, is_dense = _flatten_dense_logits(logits, y)
+    batch_idx = torch.arange(flat_logits.shape[0], device=flat_logits.device)
+    correct_logit = flat_logits[batch_idx, flat_y]
+    masked = flat_logits.clone()
+    masked[batch_idx, flat_y] = float("-inf")
     max_other_logit = masked.amax(dim=1)
-    return max_other_logit - correct_logit
+    margin = max_other_logit - correct_logit
+    return margin.reshape(batch_size, -1).mean(dim=1) if is_dense else margin
 
 
 def _dlr_loss(logits: torch.Tensor, y: torch.Tensor, targeted: bool = False) -> torch.Tensor:
     """Difference of Logits Ratio (DLR) loss (Croce & Hein, ICML 2020).
 
-    Shift- and scale-invariant logit ratio designed to resist Softmax saturation
-    and rescaling-based gradient obfuscation. Falls back to normalized margin
-    when ``num_classes < 3``.
+    Shift- and scale-invariant logit ratio supporting multi-class ``(B, C)``, single-logit binary
+    ``(B, 1)`` / ``(B,)``, HuggingFace ``.logits``, and dense segmentation ``(B, C, H, W)``.
     """
-    if logits.ndim != 2:
-        raise ValueError(f"DLR loss expects 2D logits (B, C), got shape {tuple(logits.shape)}.")
-    num_classes = logits.shape[1]
+    flat_logits, flat_y, batch_size, is_dense = _flatten_dense_logits(logits, y)
+    num_classes = flat_logits.shape[1]
     if num_classes < 3:
-        spread = (logits.amax(dim=1) - logits.amin(dim=1)).clamp(min=1e-12)
-        return _margin_loss(logits, y) / spread
+        spread = (flat_logits.amax(dim=1) - flat_logits.amin(dim=1)).clamp(min=1e-12)
+        margin_raw = _margin_loss(flat_logits, flat_y)
+        out = margin_raw / spread
+        return out.reshape(batch_size, -1).mean(dim=1) if is_dense else out
 
-    z_sorted, idx_sorted = logits.sort(dim=1, descending=True)
-    batch_idx = torch.arange(logits.shape[0], device=logits.device)
-    z_y = logits[batch_idx, y]
-    z_other = torch.where(idx_sorted[:, 0] == y, z_sorted[:, 1], z_sorted[:, 0])
+    z_sorted, idx_sorted = flat_logits.sort(dim=1, descending=True)
+    batch_idx = torch.arange(flat_logits.shape[0], device=flat_logits.device)
+    z_y = flat_logits[batch_idx, flat_y]
+    z_other = torch.where(idx_sorted[:, 0] == flat_y, z_sorted[:, 1], z_sorted[:, 0])
 
     if targeted:
         denom = (z_sorted[:, 0] - 0.5 * (z_sorted[:, 1] + z_sorted[:, 2])).clamp(min=1e-12)
     else:
         denom = (z_sorted[:, 0] - z_sorted[:, 2]).clamp(min=1e-12)
-    return (z_other - z_y) / denom
+    dlr = (z_other - z_y) / denom
+    return dlr.reshape(batch_size, -1).mean(dim=1) if is_dense else dlr
 
 
 def _mse_loss(preds: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """Per-sample mean squared error for regression / signal reconstruction models."""
-    diff = (preds - target).reshape(preds.shape[0], -1)
+    p = unwrap_model_outputs(preds)
+    diff = (p - target).reshape(p.shape[0], -1)
     if diff.is_complex():
         return (diff.real.pow(2) + diff.imag.pow(2)).mean(dim=1)
     return diff.pow(2).mean(dim=1)
@@ -64,7 +112,7 @@ def resolve_loss_fn(loss: str | LossFn | None, targeted: bool = False) -> LossFn
     if callable(loss):
         return loss
     if loss is None or loss == "ce":
-        return lambda logits, y: F.cross_entropy(logits, y, reduction="none")
+        return lambda logits, y: F.cross_entropy(normalize_classification_logits(logits), y.to(torch.long), reduction="none")
     if loss == "margin":
         return _margin_loss
     if loss == "dlr":
@@ -75,20 +123,21 @@ def resolve_loss_fn(loss: str | LossFn | None, targeted: bool = False) -> LossFn
 
 
 def outputs_to_objective(
-    outputs: torch.Tensor,
+    outputs: Any,
     y: torch.Tensor,
     loss_fn: LossFn,
     targeted: bool = False,
 ) -> torch.Tensor:
-    """Convert precomputed model outputs into per-sample scalar objective to MAXIMIZE."""
-    raw_loss = loss_fn(outputs, y)
+    """Convert precomputed model outputs (including HuggingFace ``.logits`` objects) into per-sample scalar objective."""
+    out_t = unwrap_model_outputs(outputs)
+    raw_loss = loss_fn(out_t, y)
 
     if raw_loss.is_complex():
         raw_loss = raw_loss.real
     if raw_loss.ndim == 0:
-        raw_loss = raw_loss.expand(outputs.shape[0])
+        raw_loss = raw_loss.expand(out_t.shape[0])
     elif raw_loss.ndim > 1:
-        raw_loss = raw_loss.reshape(outputs.shape[0], -1).mean(dim=1)
+        raw_loss = raw_loss.reshape(out_t.shape[0], -1).mean(dim=1)
 
     return -raw_loss if targeted else raw_loss
 

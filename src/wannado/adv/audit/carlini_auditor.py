@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -31,6 +32,7 @@ from wannado.adv.attacks.first_order.apgd_dlr_croce2020 import apgd_dlr
 from wannado.adv.attacks.first_order.fgsm_goodfellow2015 import fgsm
 from wannado.adv.attacks.first_order.pgd_madry2018 import pgd
 from wannado.adv.audit.preflight import preflight
+from wannado.adv.core.losses import predict_labels
 from wannado.adv.core.projections import random_init_perturbation, resolve_eps_budget
 from wannado.adv.core.utils import eval_mode, make_generator
 
@@ -86,7 +88,7 @@ def _eval_acc(
     y: torch.Tensor,
 ) -> float:
     with torch.no_grad():
-        return float((model_or_fn(x_adv).argmax(dim=1) == y).float().mean().item())
+        return float((predict_labels(model_or_fn(x_adv)) == y).float().mean().item())
 
 
 def _safe_attack_acc(
@@ -111,7 +113,7 @@ def audit_robustness(
     y: torch.Tensor,
     eps: float = 0.03,
     norm: str = "linf",
-    clip_bounds: tuple[float, float] | None = None,
+    clip_bounds: tuple[Any, Any] | None = None,
     pgd_steps: int = 20,
     apgd_steps: int = 35,
     square_queries: int = 350,
@@ -163,6 +165,18 @@ def audit_robustness(
 
     red_flags: list[str] = []
     recommendations: list[str] = []
+    eps_scale_meaningful = True
+    if not x_clean.is_complex() and norm in ("linf", "l2", "l1") and eps > 0:
+        span = max(float((x_clean.max() - x_clean.min()).item()), 1e-6)
+        eff_eps = eps / math.sqrt(max(1, x_clean[0].numel())) if norm == "l2" else eps
+        if eff_eps / span < 5e-4:
+            eps_scale_meaningful = False
+            red_flags.append("eps_scale_mismatch_trivial_budget")
+            recommendations.append(
+                f"Perturbation budget eps={eps:.4g} under norm='{norm}' is <0.05% of the input dynamic range "
+                f"(span={span:.4g}). Rescale eps to the domain's physical units or normalize inputs to [0, 1]."
+            )
+
     grad_probe = pre.summary.get("gradient_probe", {})
     autograd_ok = bool(grad_probe.get("autograd_connected", False))
     zero_grad_frac = float(grad_probe.get("zero_grad_fraction", 1.0))
@@ -179,12 +193,12 @@ def audit_robustness(
         gen = make_generator(seed, x_clean.device)
         eps_budget = resolve_eps_budget(x_clean, eps=eps, norm=norm)
         with torch.no_grad():
-            still_correct = model_or_fn(x_clean).argmax(dim=1) == y
+            still_correct = predict_labels(model_or_fn(x_clean)) == y
             for _ in range(max(1, random_trials)):
                 rand_delta = random_init_perturbation(
                     x_clean, eps_budget, norm=norm, clip_bounds=clip_bounds, generator=gen
                 )
-                rand_correct = model_or_fn(x_clean + rand_delta).argmax(dim=1) == y
+                rand_correct = predict_labels(model_or_fn(x_clean + rand_delta)) == y
                 still_correct = still_correct & rand_correct
         random_acc = float(still_correct.float().mean().item())
 
@@ -325,6 +339,7 @@ def audit_robustness(
 
     checks = {
         "preflight_ok": True,
+        "eps_scale_meaningful": eps_scale_meaningful,
         "autograd_healthy": autograd_healthy,
         "no_softmax_saturation": no_softmax_saturation,
         "iterative_beats_single_step": iterative_beats_single_step,

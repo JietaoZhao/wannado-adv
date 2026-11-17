@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from typing import Any
 
 import torch
 
@@ -38,8 +39,10 @@ from wannado.adv.attacks.minimum_norm.deepfool_moosavi2016 import _deepfool_sing
 from wannado.adv.core import (
     AttackMeta,
     AttackResult,
+    clamp_to_bounds,
     eval_mode,
     make_generator,
+    predict_labels,
     project_perturbation,
     resolve_eps_budget,
 )
@@ -92,13 +95,10 @@ META = AttackMeta(
 def _apply_universal_vector(
     x: torch.Tensor,
     v: torch.Tensor,
-    clip_bounds: tuple[float, float] | None,
+    clip_bounds: tuple[Any, Any] | None,
 ) -> torch.Tensor:
     """Apply universal vector ``v`` (shape ``(1, ...)``) across batch ``x``."""
-    x_adv = x + v
-    if clip_bounds is not None:
-        x_adv = torch.clamp(x_adv, min=clip_bounds[0], max=clip_bounds[1])
-    return x_adv
+    return clamp_to_bounds(x + v, clip_bounds)
 
 
 def uap(
@@ -112,7 +112,7 @@ def uap(
     overshoot: float = 0.02,
     max_classes: int = 10,
     norm: str = "linf",
-    clip_bounds: tuple[float, float] | None = None,
+    clip_bounds: tuple[Any, Any] | None = None,
     seed: int | None = None,
 ) -> AttackResult:
     """Compute a single universal adversarial perturbation ``v`` for batch ``x``.
@@ -180,7 +180,7 @@ def uap(
 
     with eval_mode(model_or_fn):
         with torch.no_grad():
-            ref_labels = y if y is not None else model_or_fn(x_clean).argmax(dim=1)
+            ref_labels = y if y is not None else predict_labels(model_or_fn(x_clean))
 
         for epoch in range(1, max_iter_uni + 1):
             epochs_run = epoch
@@ -192,7 +192,7 @@ def uap(
             for idx in order:
                 x_cur = _apply_universal_vector(x_clean[idx : idx + 1], v, clip_bounds)
                 with torch.no_grad():
-                    cur_pred = int(model_or_fn(x_cur).argmax(dim=1)[0].item())
+                    cur_pred = int(predict_labels(model_or_fn(x_cur))[0].item())
                 if cur_pred != int(ref_labels[idx].item()):
                     continue
 
@@ -213,7 +213,7 @@ def uap(
 
             with torch.no_grad():
                 x_eval = _apply_universal_vector(x_clean, v, clip_bounds)
-                preds = model_or_fn(x_eval).argmax(dim=1)
+                preds = predict_labels(model_or_fn(x_eval))
                 fooling_rate = float((preds != ref_labels).float().mean().item())
 
             if fooling_rate > best_fooling_rate:

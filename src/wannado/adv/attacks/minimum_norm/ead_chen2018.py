@@ -31,6 +31,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
+from typing import Any
 
 import torch
 
@@ -38,6 +39,7 @@ from wannado.adv.attacks.minimum_norm.cw_l2_carlini2017 import _cw_margin_object
 from wannado.adv.core import (
     AttackMeta,
     AttackResult,
+    clamp_to_bounds,
     compute_perturbation_norm,
     eval_mode,
 )
@@ -91,7 +93,7 @@ def _soft_threshold_box(
     z: torch.Tensor,
     x_clean: torch.Tensor,
     thresh: torch.Tensor,
-    clip_bounds: tuple[float, float] | None,
+    clip_bounds: tuple[Any, Any] | None,
 ) -> torch.Tensor:
     """Proximal operator for beta * ||delta||_1 + indicator_{box}(x + delta), real & complex safe."""
     delta = z - x_clean
@@ -102,9 +104,7 @@ def _soft_threshold_box(
 
     shrunk = torch.sign(delta) * (delta.abs() - thresh).clamp(min=0.0)
     x_out = x_clean + shrunk
-    if clip_bounds is not None:
-        x_out = torch.clamp(x_out, min=clip_bounds[0], max=clip_bounds[1])
-    return x_out
+    return clamp_to_bounds(x_out, clip_bounds)
 
 
 def ead(
@@ -122,7 +122,7 @@ def ead(
     initial_const: float = 1e-2,
     abort_early: bool = True,
     targeted: bool = False,
-    clip_bounds: tuple[float, float] | None = None,
+    clip_bounds: tuple[Any, Any] | None = None,
 ) -> AttackResult:
     """Run EAD Elastic-Net (L1 + L2) attack via FISTA optimization."""
     if decision_rule not in ("EN", "L1"):
@@ -183,9 +183,7 @@ def ead(
                     )
                     t_next = 0.5 * (1.0 + math.sqrt(1.0 + 4.0 * t_k * t_k))
                     mom_coeff = (t_k - 1.0) / t_next
-                    y_k = x_next + mom_coeff * (x_next - x_k)
-                    if clip_bounds is not None:
-                        y_k = torch.clamp(y_k, min=clip_bounds[0], max=clip_bounds[1])
+                    y_k = clamp_to_bounds(x_next + mom_coeff * (x_next - x_k), clip_bounds)
                     x_k = x_next
                     t_k = t_next
 

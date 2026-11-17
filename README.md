@@ -1,8 +1,8 @@
 # WannaDo Series: Automated AI-Collaboration Platform for Adversarial Learning — `wannado-adv`
 
-> Part of the **WannaDo** human–AI collaborative scientific research platform · **Release `v1.0.4`**
+> Part of the **WannaDo** human–AI collaborative scientific research platform · **Release `v1.0.5`**
 
-[![Version](https://img.shields.io/badge/version-1.0.4-2563eb)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-1.0.5-2563eb)](pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-0f766e)](pyproject.toml)
 [![Families](https://img.shields.io/badge/threat%20families-9%20paradigms-7c3aed)](#quick-usage-python--cli)
 [![Attacks](https://img.shields.io/badge/executable%20attacks-35%20single--file-059669)](#quick-usage-python--cli)

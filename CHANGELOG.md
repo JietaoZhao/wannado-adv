@@ -2,6 +2,19 @@
 
 All notable changes to `wannado-adv` will be documented in this file.
 
+## [1.0.5] - 2026-11-17
+
+### Added
+- **Cross-domain output normalization (`core/losses.py`)**: Added `unwrap_model_outputs`, `normalize_classification_logits`, and `predict_labels` so single-logit binary models `(B, 1)` / `(B,)`, HuggingFace `ModelOutput` objects exposing `.logits`, and dense 4D segmentation maps `(B, C, H, W)` work uniformly across attacks, `preflight()`, `audit_robustness()`, and `evaluate_suite()`.
+- **Per-feature tabular bounds, immutable masks & discrete snapping (`core/projections.py`)**: Added `coerce_clip_bounds`, `clamp_to_bounds`, `perturb_mask` filtering on `project_perturbation` / `random_init_perturbation`, and `project_discrete_features` for categorical/binary tabular columns.
+- **scikit-learn adapter (`core/utils.py`)**: Added `SklearnModelAdapter` / `wrap_sklearn_model` supporting `decision_function`, `predict_proba`, and hard `predict` oracles cleanly inside black-box attacks.
+- **Scale mismatch guard & expanded domain discovery**: Added `eps_scale_mismatch_trivial_budget` detection to `audit_robustness()`, added `readme_summary` + `detected_symbols` extraction and `medical`/`cybersecurity`/`nlp_transformers`/`general` domain classification to `scan_project()`, enabled lazy submodule access (`wadv.copilot`, `wadv.audit`, etc.) on `wannado.adv`, and added `steps` / `max_queries` aliases on black-box attacks.
+
+### Fixed
+- Eliminated crashes when passing per-feature vector `clip_bounds=(min_vec, max_vec)` across first-order, minimum-norm (`cw_l2`, `ead`, `fab`, `deepfool`, `jsma`, `sparsefool`), black-box (`nes`, `spsa`, `zoo`, `boundary`, `hopskipjump`), universal/patch/generative (`uap`, `vmifgsm`, `adv_patch`, `advgan`, `gap`), `preflight()`, and `EvaluationReport.to_json()`.
+- Stopped `preflight()` and `probe_model_context()` from reporting `ok=True` when given an uncallable scikit-learn estimator; now surfaces explicit remediation guidance pointing to `wrap_sklearn_model()`.
+- Escaped `#`, `$`, `^`, and `~` cleanly in `EvaluationReport.to_latex()`.
+
 ## [1.0.4] - 2026-11-17
 
 ### Fixed

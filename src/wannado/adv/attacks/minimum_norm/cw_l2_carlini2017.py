@@ -30,12 +30,14 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from typing import Any
 
 import torch
 
 from wannado.adv.core import (
     AttackMeta,
     AttackResult,
+    coerce_clip_bounds,
     compute_perturbation_norm,
     eval_mode,
 )
@@ -127,7 +129,7 @@ def cw_l2(
     initial_const: float = 1e-2,
     abort_early: bool = True,
     targeted: bool = False,
-    clip_bounds: tuple[float, float] | None = None,
+    clip_bounds: tuple[Any, Any] | None = None,
 ) -> AttackResult:
     """Run Carlini & Wagner L2 attack (bounded tanh space or unbounded real/complex space).
 
@@ -164,8 +166,8 @@ def cw_l2(
     view_shape = (batch_size,) + (1,) * (x_clean.ndim - 1)
 
     if clip_bounds is not None:
-        low, high = clip_bounds
-        if low >= high:
+        low, high = coerce_clip_bounds(clip_bounds, x_clean)
+        if bool((low >= high).any().item()):
             raise ValueError(f"clip_bounds requires low < high, got {clip_bounds}.")
         half_span = 0.5 * (high - low)
         mid = 0.5 * (high + low)
