@@ -191,7 +191,7 @@ def apgd_l1(
         (batch_size,), float("-inf"), device=x_clean.device, dtype=eps_budget.dtype
     )
 
-    k_start = max(1, int(round(sparsity_init_frac * dim)))
+    k_start = max(1, round(sparsity_init_frac * dim))
 
     with eval_mode(model_or_fn):
         for _ in range(restarts):
@@ -224,7 +224,7 @@ def apgd_l1(
             for k in range(steps):
                 # Anneal active coordinate count from broad L1 exploration toward ultra-sparse updates.
                 frac_left = 1.0 - float(k) / float(max(steps - 1, 1))
-                top_k = max(1, int(round(1 + (k_start - 1) * (frac_left**2))))
+                top_k = max(1, round(1 + (k_start - 1) * (frac_left**2)))
 
                 # [AI-Prompt Hook]: Exact L1-box steepest coordinate direction + exact box-L1 projection.
                 steep = _l1_steepest_step(

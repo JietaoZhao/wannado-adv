@@ -183,7 +183,9 @@ def _fab_single_sample(
         num_classes = logits_clean.shape[1]
         sorted_classes = logits_clean.argsort(dim=1, descending=True)[0]
         if targeted:
-            candidate_classes = [target_label]  # type: ignore[list-item]
+            if target_label is None:
+                raise ValueError("target_label must be provided when targeted=True.")
+            candidate_classes: list[int] = [int(target_label)]
         else:
             candidate_classes = [
                 int(c.item()) for c in sorted_classes if int(c.item()) != y_orig

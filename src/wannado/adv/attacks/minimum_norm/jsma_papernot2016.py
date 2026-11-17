@@ -184,7 +184,7 @@ def jsma(
     x_clean = x.detach()
     batch_size = x_clean.shape[0]
     dim = x_clean[0].numel()
-    max_iters = max(1, int(round(dim * gamma)))
+    max_iters = max(1, round(dim * gamma))
     x_adv = x_clean.clone()
     total_steps = 0
 

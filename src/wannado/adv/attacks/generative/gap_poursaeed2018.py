@@ -38,7 +38,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 from wannado.adv.core import (
     AttackMeta,
@@ -143,42 +143,43 @@ class _ShapeAdaptivePerturbGenerator(nn.Module):
         self.is_complex = is_complex
         mult = 2 if is_complex else 1
 
+        last: nn.Conv2d | nn.Conv1d | nn.Linear
         if len(sample_shape) == 3:
             # 4D batch input: (B, C, H, W)
             c = sample_shape[0] * mult
             h = max(16, min(hidden, 32))
+            last = nn.Conv2d(h, c, kernel_size=3, padding=1)
             self.net = nn.Sequential(
                 nn.Conv2d(c, h, kernel_size=3, padding=1),
                 nn.ReLU(inplace=True),
                 nn.Conv2d(h, h, kernel_size=3, padding=1),
                 nn.ReLU(inplace=True),
-                nn.Conv2d(h, c, kernel_size=3, padding=1),
+                last,
             )
-            last = self.net[-1]
         elif len(sample_shape) == 2:
             # 3D batch input: (B, C, L)
             c = sample_shape[0] * mult
             h = max(16, min(hidden, 32))
+            last = nn.Conv1d(h, c, kernel_size=3, padding=1)
             self.net = nn.Sequential(
                 nn.Conv1d(c, h, kernel_size=3, padding=1),
                 nn.ReLU(inplace=True),
                 nn.Conv1d(h, h, kernel_size=3, padding=1),
                 nn.ReLU(inplace=True),
-                nn.Conv1d(h, c, kernel_size=3, padding=1),
+                last,
             )
-            last = self.net[-1]
         else:
             # 2D batch (B, D) or arbitrary ND
             dim = math.prod(sample_shape) * mult
+            last = nn.Linear(hidden, dim)
             self.net = nn.Sequential(
                 nn.Flatten(),
                 nn.Linear(dim, hidden),
                 nn.ReLU(inplace=True),
                 nn.Linear(hidden, hidden),
                 nn.ReLU(inplace=True),
-                nn.Linear(hidden, dim),
+                last,
             )
-            last = self.net[-1]
 
         nn.init.normal_(last.weight, mean=0.0, std=1e-2)
         if last.bias is not None:

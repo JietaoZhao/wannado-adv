@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import inspect
 import json
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
+from typing import Any
 
+from wannado.adv import __version__
 from wannado.adv.agent_kit import install_agent_kit
-from wannado.adv.catalog.build_catalog import build_registry_json, query_catalog
+from wannado.adv.audit.preflight import preflight as run_preflight
+from wannado.adv.catalog.build_catalog import build_registry_json, load_catalog, query_catalog
 from wannado.adv.copilot import (
     build_interactive_brief,
     explain_parameters,
@@ -99,6 +104,24 @@ def _build_parser() -> argparse.ArgumentParser:
         default="all",
         choices=["all", "universal", "cursor", "antigravity", "claude", "codex"],
     )
+
+    # 9. preflight
+    p_pf = sub.add_parser(
+        "preflight",
+        help="Run autograd, budget, NaN, and wireless JSR preflight checks on an adv_eval/interface.py.",
+    )
+    p_pf.add_argument("--interface", default="./adv_eval/interface.py", dest="interface_path")
+    p_pf.add_argument("--device", default="cpu")
+    p_pf.add_argument("--samples", type=int, default=32)
+    p_pf.add_argument("--attack", default=None)
+    p_pf.add_argument("--json", action="store_true", dest="as_json")
+
+    # 10. arsenal
+    p_ars = sub.add_parser(
+        "arsenal",
+        help="Display versioned wannado-adv adversarial arsenal & Carlini false-robustness audit stack.",
+    )
+    p_ars.add_argument("--json", action="store_true", dest="as_json")
 
     return parser
 
@@ -201,6 +224,61 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Installed wannado-adv AI Co-Pilot skill/rules for ide='{args.ide}':")
         for role, path in written.items():
             print(f"  - {role}: {path}")
+        return 0
+
+    if args.command == "preflight":
+        iface_path = Path(args.interface_path).resolve()
+        spec = importlib.util.spec_from_file_location("_wannado_adv_user_iface", iface_path)
+        if spec is None or spec.loader is None:
+            raise FileNotFoundError(f"Cannot load interface module at {iface_path}")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        loader_fn = mod.load_victim_interface
+        sig_params = inspect.signature(loader_fn).parameters
+        loader_kwargs: dict[str, Any] = {}
+        if "device" in sig_params:
+            loader_kwargs["device"] = args.device
+        if "num_samples" in sig_params:
+            loader_kwargs["num_samples"] = args.samples
+        victim = loader_fn(**loader_kwargs)
+        pf = run_preflight(
+            victim.model_or_fn,
+            victim.x_eval,
+            victim.y_eval,
+            eps=victim.eps,
+            norm=victim.norm,
+            clip_bounds=victim.clip_bounds,
+            attack=args.attack,
+        )
+        if args.as_json:
+            print(json.dumps(pf.to_dict(), indent=2, ensure_ascii=False))
+        else:
+            print(pf.format_report())
+        return 0 if pf.ok else 1
+
+    if args.command == "arsenal":
+        cards = load_catalog()
+        by_family: dict[str, list[dict[str, Any]]] = {}
+        for c in cards:
+            by_family.setdefault(c["family"], []).append(c)
+        arsenal_payload: dict[str, Any] = {
+            "package": "wannado-adv",
+            "version": __version__,
+            "total_attacks": len(cards),
+            "families": {
+                fam: [{"id": c["id"], "tier": c["tier"], "threat_model": c["threat_model"]} for c in items]
+                for fam, items in by_family.items()
+            },
+            "audits": ["preflight", "audit_robustness (Carlini et al. 2019)"],
+        }
+        if args.as_json:
+            print(json.dumps(arsenal_payload, indent=2, ensure_ascii=False))
+        else:
+            print(f"[wannado-adv v{__version__}] Adversarial Robustness Arsenal ({len(cards)} attacks):")
+            for fam, items in by_family.items():
+                summary = ", ".join(f"{c['id']}[{c['tier']}]" for c in items)
+                print(f"  - {fam:<18s} ({len(items):2d}): {summary}")
+            print("  Audits & Safeguards: preflight(), audit_robustness() (Carlini et al. 2019)")
         return 0
 
     return 1

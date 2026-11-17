@@ -120,15 +120,15 @@ def _default_input_diversity(
     if x.ndim == 4:
         _, _, h, w = x.shape
         if preserve_shape:
-            min_h = max(1, min(h - 1, int(round(h / resize_rate)))) if h > 1 else 1
-            min_w = max(1, min(w - 1, int(round(w / resize_rate)))) if w > 1 else 1
+            min_h = max(1, min(h - 1, round(h / resize_rate))) if h > 1 else 1
+            min_w = max(1, min(w - 1, round(w / resize_rate))) if w > 1 else 1
             rnd_h = int(torch.randint(min_h, h + 1, (), device=x.device, generator=generator).item())
             rnd_w = int(torch.randint(min_w, w + 1, (), device=x.device, generator=generator).item())
             resized = _interpolate_complex_safe(x, size=(rnd_h, rnd_w), mode="bilinear")
             pad_h, pad_w = h - rnd_h, w - rnd_w
         else:
-            out_h = max(h + 1, int(round(h * resize_rate)))
-            out_w = max(w + 1, int(round(w * resize_rate)))
+            out_h = max(h + 1, round(h * resize_rate))
+            out_w = max(w + 1, round(w * resize_rate))
             rnd_h = int(torch.randint(h, out_h + 1, (), device=x.device, generator=generator).item())
             rnd_w = int(torch.randint(w, out_w + 1, (), device=x.device, generator=generator).item())
             resized = _interpolate_complex_safe(x, size=(rnd_h, rnd_w), mode="bilinear")
@@ -140,7 +140,7 @@ def _default_input_diversity(
 
     if x.ndim == 3:
         _, _, length = x.shape
-        min_l = max(1, min(length - 1, int(round(length / resize_rate)))) if length > 1 else 1
+        min_l = max(1, min(length - 1, round(length / resize_rate))) if length > 1 else 1
         rnd_l = int(torch.randint(min_l, length + 1, (), device=x.device, generator=generator).item())
         resized = _interpolate_complex_safe(x, size=(rnd_l,), mode="linear")
         pad_l = length - rnd_l

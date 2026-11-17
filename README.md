@@ -1,8 +1,8 @@
 # WannaDo Series: Automated AI-Collaboration Platform for Adversarial Learning — `wannado-adv`
 
-> Part of the **WannaDo** human–AI collaborative scientific research platform · **Release `v1.0.3`**
+> Part of the **WannaDo** human–AI collaborative scientific research platform · **Release `v1.0.4`**
 
-[![Version](https://img.shields.io/badge/version-1.0.3-2563eb)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-1.0.4-2563eb)](pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-0f766e)](pyproject.toml)
 [![Families](https://img.shields.io/badge/threat%20families-9%20paradigms-7c3aed)](#quick-usage-python--cli)
 [![Attacks](https://img.shields.io/badge/executable%20attacks-35%20single--file-059669)](#quick-usage-python--cli)
@@ -89,8 +89,10 @@ cards = query_catalog(family="first_order", tier="S")
 <summary>Standalone Co-Pilot CLI &amp; End-to-End Reporting Python API</summary>
 
 ```bash
-# Traverse your project, detect domain & SOTA lineage, and print parameter guides
+# Inspect project, display the 35-attack arsenal, or run interface preflight checks
 wannado-adv inspect .
+wannado-adv arsenal
+wannado-adv preflight --interface ./adv_eval/interface.py
 
 # Scaffold ONE non-intrusive evaluation boundary (adv_eval/interface.py + adv_eval/run_eval.py)
 wannado-adv scaffold --dir ./adv_eval --domain wireless

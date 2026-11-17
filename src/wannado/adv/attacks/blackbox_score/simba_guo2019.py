@@ -39,7 +39,6 @@ import torch.nn.functional as F
 from wannado.adv.core import (
     AttackMeta,
     AttackResult,
-    compute_attack_objective,
     eval_mode,
     make_generator,
     project_perturbation,

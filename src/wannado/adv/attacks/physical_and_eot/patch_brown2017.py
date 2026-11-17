@@ -96,8 +96,8 @@ def _default_patch_mask(x: torch.Tensor, patch_fraction: float) -> torch.Tensor:
     mask = torch.zeros((1, *x.shape[1:]), device=x.device, dtype=torch.float32)
     if x.ndim == 4:
         _, _, h, w = x.shape
-        ph = max(1, min(h, int(round(h * math.sqrt(patch_fraction)))))
-        pw = max(1, min(w, int(round(w * math.sqrt(patch_fraction)))))
+        ph = max(1, min(h, round(h * math.sqrt(patch_fraction))))
+        pw = max(1, min(w, round(w * math.sqrt(patch_fraction))))
         top = (h - ph) // 2
         left = (w - pw) // 2
         mask[:, :, top : top + ph, left : left + pw] = 1.0
@@ -105,7 +105,7 @@ def _default_patch_mask(x: torch.Tensor, patch_fraction: float) -> torch.Tensor:
 
     # 2D / 3D / ND: contiguous center burst along the last axis
     last_len = x.shape[-1]
-    span = max(1, min(last_len, int(round(last_len * patch_fraction))))
+    span = max(1, min(last_len, round(last_len * patch_fraction)))
     start = (last_len - span) // 2
     slices = [slice(None)] * mask.ndim
     slices[-1] = slice(start, start + span)
@@ -153,6 +153,7 @@ def adv_patch(
     targeted: bool = False,
     universal: bool = True,
     random_location: bool = False,
+    eot_samples: int = 2,
     clip_bounds: tuple[float, float] | None = None,
     seed: int | None = None,
 ) -> AttackResult:
@@ -163,12 +164,13 @@ def adv_patch(
         raise ValueError(f"lr must be > 0, got {lr}.")
     if not 0.0 < patch_fraction <= 1.0:
         raise ValueError(f"patch_fraction must be in (0, 1], got {patch_fraction}.")
+    if eot_samples < 1:
+        raise ValueError(f"eot_samples must be >= 1, got {eot_samples}.")
     if clip_bounds is not None and x.is_complex():
         raise ValueError("clip_bounds is only supported for real-valued tensors.")
 
     t0 = time.perf_counter()
     x_clean = x.detach()
-    batch_size = x_clean.shape[0]
     loss_fn = resolve_loss_fn(loss, targeted=targeted)
     generator = make_generator(seed, x_clean.device)
 
@@ -215,35 +217,69 @@ def adv_patch(
             x_out = x_out.clamp(min=clip_bounds[0], max=clip_bounds[1])
         return x_out
 
-    with eval_mode(model_or_fn):
-        for _ in range(steps):
-            if random_location and universal:
-                step_mask, step_patch_view, shifts, dims = _shift_mask_and_patch(
-                    base_mask, patch, generator
-                )
-            else:
-                step_mask, step_patch_view, shifts, dims = base_mask, patch, (), ()
+    mom = torch.zeros_like(patch)
+    use_eot = random_location and universal
+    eval_every = max(1, steps // 10)
 
-            patch_var = step_patch_view.detach().requires_grad_(True)
-            x_patched = _apply_patch(x_clean, patch_var, step_mask)
-            # [AI-Prompt Hook]: Brown et al. (2017) maximizes expected patch fooling objective
-            # over random placements. Insert brightness/rotation/fading EoT transforms before forward.
-            logits = model_or_fn(x_patched)
-            obj_raw = loss_fn(logits, y)
-            if obj_raw.is_complex():
-                obj_raw = obj_raw.real
-            obj = (-obj_raw if targeted else obj_raw).mean()
-            (grad_p,) = torch.autograd.grad(obj, patch_var, only_inputs=True)
-            grad_masked = grad_p.detach() * step_mask.to(dtype=x_clean.dtype)
-            if shifts:
-                grad_masked = torch.roll(
-                    grad_masked, shifts=tuple(-s for s in shifts), dims=dims
-                )
+    def _eval_obj(patch_t: torch.Tensor, mask_t: torch.Tensor) -> float:
+        with torch.no_grad():
+            x_p = _apply_patch(x_clean, patch_t, mask_t)
+            logits_p = model_or_fn(x_p)
+            raw_p = loss_fn(logits_p, y)
+            if raw_p.is_complex():
+                raw_p = raw_p.real
+            return float((-raw_p if targeted else raw_p).mean().item())
+
+    with eval_mode(model_or_fn):
+        for step_idx in range(steps):
+            if use_eot:
+                grad_acc = torch.zeros_like(patch)
+                for k_idx in range(eot_samples):
+                    shifts: tuple[int, ...]
+                    dims: tuple[int, ...]
+                    if k_idx == 0 and step_idx % 4 == 0:
+                        step_mask, step_patch_view, shifts, dims = base_mask, patch, (), ()
+                    else:
+                        step_mask, step_patch_view, shifts, dims = _shift_mask_and_patch(
+                            base_mask, patch, generator
+                        )
+                    patch_var = step_patch_view.detach().requires_grad_(True)
+                    x_patched = _apply_patch(x_clean, patch_var, step_mask)
+                    # [AI-Prompt Hook]: Brown et al. (2017) maximizes expected patch fooling objective
+                    # over random placements. Insert brightness/rotation/fading EoT transforms before forward.
+                    logits = model_or_fn(x_patched)
+                    obj_raw = loss_fn(logits, y)
+                    if obj_raw.is_complex():
+                        obj_raw = obj_raw.real
+                    obj = (-obj_raw if targeted else obj_raw).mean()
+                    (grad_p,) = torch.autograd.grad(obj, patch_var, only_inputs=True)
+                    grad_masked = grad_p.detach() * step_mask.to(dtype=x_clean.dtype)
+                    if shifts:
+                        grad_masked = torch.roll(
+                            grad_masked, shifts=tuple(-s for s in shifts), dims=dims
+                        )
+                    grad_acc = grad_acc + grad_masked / float(eot_samples)
+                mom = 0.7 * mom + grad_acc
+                grad_for_step = mom
+            else:
+                patch_var = patch.detach().requires_grad_(True)
+                x_patched = _apply_patch(x_clean, patch_var, base_mask)
+                logits = model_or_fn(x_patched)
+                obj_raw = loss_fn(logits, y)
+                if obj_raw.is_complex():
+                    obj_raw = obj_raw.real
+                obj = (-obj_raw if targeted else obj_raw).mean()
+                val = float(obj.item())
+                if val > best_obj_mean:
+                    best_obj_mean = val
+                    best_patch = patch.clone()
+                (grad_p,) = torch.autograd.grad(obj, patch_var, only_inputs=True)
+                grad_for_step = grad_p.detach() * base_mask.to(dtype=x_clean.dtype)
 
             step_dir = (
-                torch.sgn(grad_masked)
-                if grad_masked.is_complex()
-                else torch.sign(grad_masked)
+                torch.sgn(grad_for_step)
+                if grad_for_step.is_complex()
+                else torch.sign(grad_for_step)
             )
             step_scale = lr
             if eps_budget is not None and norm == "linf":
@@ -269,9 +305,16 @@ def adv_patch(
 
             patch = updated_patch
 
-            val = float(obj.item())
-            if val > best_obj_mean:
-                best_obj_mean = val
+            if use_eot and (step_idx % eval_every == eval_every - 1 or step_idx == steps - 1):
+                val = _eval_obj(patch, base_mask)
+                if val > best_obj_mean:
+                    best_obj_mean = val
+                    best_patch = patch.clone()
+
+        if not use_eot:
+            val_final = _eval_obj(patch, base_mask)
+            if val_final > best_obj_mean:
+                best_obj_mean = val_final
                 best_patch = patch.clone()
 
     x_adv = _apply_patch(x_clean, best_patch, best_mask)

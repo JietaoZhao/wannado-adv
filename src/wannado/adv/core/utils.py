@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 
 @contextmanager

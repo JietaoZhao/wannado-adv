@@ -212,7 +212,7 @@ def _propose_candidate(
 
     if delta.ndim == 4:
         _, c, h, w = delta.shape
-        s = max(1, min(h, w, int(round(math.sqrt(p * h * w)))))
+        s = max(1, min(h, w, round(math.sqrt(p * h * w))))
         if norm == "linf":
             # Fully vectorized mask update avoids per-sample .item() GPU/MPS barriers.
             h0 = torch.randint(0, h - s + 1, (b, 1, 1, 1), device=delta.device, generator=generator)
@@ -261,7 +261,7 @@ def _propose_candidate(
     # Arbitrary-rank tensor (1D/2D/3D: wireless IQ frames, tabular, time series, DRL states)
     cand_flat = cand.reshape(b, -1)
     dim = cand_flat.shape[1]
-    s = max(1, min(dim, int(round(p * dim))))
+    s = max(1, min(dim, round(p * dim)))
     if norm == "linf":
         pos1 = torch.randint(0, dim - s + 1, (b, 1), device=delta.device, generator=generator)
         idx = torch.arange(dim, device=delta.device).view(1, dim)

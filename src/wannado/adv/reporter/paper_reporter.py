@@ -192,8 +192,7 @@ class EvaluationReport:
             "% Requires \\usepackage{booktabs}",
             "\\begin{table}[t]",
             "  \\centering",
-            f"  \\caption{{Adversarial robustness evaluation of {_esc(self.model_name)} on {_esc(self.dataset_name)} "
-            f"($N={self.num_samples}$, norm=\\texttt{{{_esc(self.norm)}}}, $\\epsilon={eps_desc}$).}}",
+            f"  \\caption{{Adversarial robustness evaluation of {_esc(self.model_name)} on {_esc(self.dataset_name)} ($N={self.num_samples}$, norm=\\texttt{{{_esc(self.norm)}}}, $\\epsilon={eps_desc}$).}}",
             "  \\label{tab:wannado_robustness}",
             "  \\begin{tabular}{llcccc}",
             "    \\toprule",
@@ -334,8 +333,8 @@ def _resolve_attack_entry(
         return card["id"], fn, card
 
     fn = entry
-    mod = sys.modules.get(getattr(fn, "__module__", ""))
-    meta_obj = getattr(fn, "META", None) or (getattr(mod, "META", None) if mod is not None else None)
+    fn_mod = sys.modules.get(getattr(fn, "__module__", ""))
+    meta_obj = getattr(fn, "META", None) or (getattr(fn_mod, "META", None) if fn_mod is not None else None)
     if isinstance(meta_obj, AttackMeta):
         card = meta_obj.to_dict()
         return card["id"], fn, card
@@ -378,7 +377,7 @@ def _build_call_kwargs(
     for pname, p in params.items():
         if pname in skip_params:
             continue
-        val = call_kwargs[pname] if pname in call_kwargs else p.default
+        val = call_kwargs.get(pname, p.default)
         if val is inspect.Parameter.empty:
             continue
         if callable(val):

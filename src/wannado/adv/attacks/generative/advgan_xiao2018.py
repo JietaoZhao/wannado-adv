@@ -36,12 +36,12 @@ import time
 from collections.abc import Callable
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from wannado.adv.attacks.generative.gap_poursaeed2018 import (
-    _ShapeAdaptivePerturbGenerator,
     _pack_to_real,
+    _ShapeAdaptivePerturbGenerator,
     _smooth_budget_delta,
     _unpack_from_real,
     _victim_grad_guard,

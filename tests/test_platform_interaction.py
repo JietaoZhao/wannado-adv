@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import subprocess
 import sys
 import tempfile
@@ -11,7 +10,7 @@ import unittest
 from pathlib import Path
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 from wannado.adv import (
     EvaluationReport,
@@ -25,8 +24,8 @@ from wannado.adv import (
     install_agent_kit,
     probe_model_context,
     recommend_suite,
-    scan_project,
     scaffold_interface,
+    scan_project,
 )
 from wannado.adv.cli import main as cli_main
 
@@ -231,6 +230,7 @@ class TestWorkspaceIsolationEjectionAndReporting(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 timeout=30,
+                check=False,
             )
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
             self.assertIn("Academic Evaluation Report", proc.stdout)
@@ -244,6 +244,7 @@ class TestWorkspaceIsolationEjectionAndReporting(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 timeout=30,
+                check=False,
             )
             self.assertEqual(proc_mod.returncode, 0, msg=proc_mod.stderr)
             self.assertIn("[wannado-adv] Clean baseline:", proc_mod.stdout)
@@ -302,12 +303,18 @@ class TestAgentKitAndCLI(unittest.TestCase):
             # Smoke test CLI commands
             self.assertEqual(cli_main(["inspect", str(root)]), 0)
             self.assertEqual(cli_main(["inspect", str(root), "--json"]), 0)
+            self.assertEqual(cli_main(["arsenal"]), 0)
+            self.assertEqual(cli_main(["arsenal", "--json"]), 0)
             self.assertEqual(cli_main(["init-agent", "--ide", "universal", "--dir", str(Path(tmp) / "cli_uni")]), 0)
             self.assertEqual(cli_main(["catalog", "--tier", "S"]), 0)
             self.assertEqual(cli_main(["lineage", "--family", "transferability"]), 0)
             self.assertEqual(cli_main(["recommend", "--domain", "vision", "--goal", "sanity"]), 0)
             self.assertEqual(cli_main(["cite", "fgsm", "apgd_dlr", "--format", "ieee"]), 0)
             self.assertEqual(cli_main(["scaffold", "--dir", str(root / "eval_box"), "--domain", "vision", "--eps", "8/255"]), 0)
+            self.assertEqual(
+                cli_main(["preflight", "--interface", str(root / "eval_box" / "interface.py"), "--samples", "8"]),
+                0,
+            )
             self.assertAlmostEqual(
                 float((root / "eval_box" / "interface.py").read_text(encoding="utf-8").split("eps=")[1].split(",")[0]),
                 8.0 / 255.0,

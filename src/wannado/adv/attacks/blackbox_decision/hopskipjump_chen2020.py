@@ -295,9 +295,7 @@ def _approximate_gradient(
     fval = torch.where(adv_mask, 1.0, -1.0).to(norms_view.dtype)
     fval_mean = float(fval.mean().item())
 
-    if fval_mean == 1.0:
-        weights = fval
-    elif fval_mean == -1.0:
+    if fval_mean in (1.0, -1.0):
         weights = fval
     else:
         weights = fval - fval_mean
@@ -355,7 +353,7 @@ def _hopskipjump_single_sample(
 
     for step_idx in range(1, steps + 1):
         delta_probe = math.sqrt(max(d_real, 1)) * theta * max(dist, 1e-6)
-        num_evals = min(max_num_evals, int(round(initial_num_evals * math.sqrt(step_idx))))
+        num_evals = min(max_num_evals, round(initial_num_evals * math.sqrt(step_idx)))
         num_evals = max(num_evals, 1)
 
         grad_est, grad_q = _approximate_gradient(

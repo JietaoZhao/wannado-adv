@@ -43,20 +43,20 @@ def _batch_l2_norm(x: torch.Tensor) -> torch.Tensor:
     return safe_l2_norm(x.reshape(b, -1), dim=1)
 
 
-def resolve_eps_budget(x: torch.Tensor, eps: float, norm: str) -> torch.Tensor:
-    """Resolve a scalar perturbation budget into a broadcastable per-sample tensor.
+def resolve_eps_budget(x: torch.Tensor, eps: float | torch.Tensor, norm: str) -> torch.Tensor:
+    """Resolve a scalar or per-sample perturbation budget into a broadcastable tensor.
 
     Args:
         x: Clean input tensor with batch dimension at axis 0.
-        eps: Perturbation magnitude. For ``norm="jsr_db"``, this is the
-            Jamming-to-Signal Ratio in decibels (may be negative, e.g. ``-10.0``).
+        eps: Perturbation magnitude (scalar or ``(B,)`` tensor). For ``norm="jsr_db"``,
+            this is the Jamming-to-Signal Ratio in decibels (may be negative, e.g. ``-10.0``).
             For all other norms, must be ``>= 0``.
-        norm: Constraint type (``"linf"``, ``"l2"``, ``"relative_l2"``, ``"jsr_db"``).
+        norm: Constraint type (``"linf"``, ``"l2"``, ``"l1"``, ``"relative_l2"``, ``"jsr_db"``).
 
     Returns:
         Real-valued tensor of shape ``(B, 1, ..., 1)`` representing the maximum
-        allowed element-wise magnitude (for ``"linf"``) or per-sample L2 radius
-        (for ``"l2"``, ``"relative_l2"``, and ``"jsr_db"``).
+        allowed element-wise magnitude (for ``"linf"``), L1 radius (for ``"l1"``),
+        or per-sample L2 radius (for ``"l2"``, ``"relative_l2"``, and ``"jsr_db"``).
     """
     if norm not in SUPPORTED_NORMS:
         raise ValueError(f"Unsupported norm '{norm}'. Choose from {sorted(SUPPORTED_NORMS)}.")
@@ -66,22 +66,46 @@ def resolve_eps_budget(x: torch.Tensor, eps: float, norm: str) -> torch.Tensor:
     real_dtype = _real_dtype_for(x)
     view_shape = (x.shape[0],) + (1,) * (x.ndim - 1)
 
-    if norm != "jsr_db" and eps < 0:
-        raise ValueError(f"eps must be >= 0 for norm='{norm}', got {eps}.")
+    if isinstance(eps, torch.Tensor) and eps.ndim > 0:
+        eps_t = eps.to(device=x.device, dtype=real_dtype).reshape(-1)
+        if eps_t.numel() == 1:
+            eps_t = eps_t.expand(x.shape[0])
+        elif eps_t.numel() != x.shape[0]:
+            raise ValueError(
+                f"Per-sample eps tensor must match batch size {x.shape[0]}, got shape {tuple(eps.shape)}."
+            )
+        eps_t = eps_t.view(view_shape)
+        if norm != "jsr_db" and bool((eps_t < 0).any().item()):
+            raise ValueError(f"eps must be >= 0 for norm='{norm}', got min={float(eps_t.min().item())}.")
+        if norm in ("linf", "l2", "l1"):
+            return eps_t
+        x_norm = _batch_l2_norm(x).to(real_dtype).view(view_shape)
+        if norm == "relative_l2":
+            return eps_t * x_norm
+        scale = torch.where(
+            torch.isinf(eps_t) & (eps_t < 0),
+            torch.zeros_like(eps_t),
+            torch.pow(10.0, eps_t.to(torch.float64) / 20.0).to(real_dtype),
+        )
+        return scale * x_norm
+
+    eps_f = float(eps.item()) if isinstance(eps, torch.Tensor) else float(eps)
+    if norm != "jsr_db" and eps_f < 0:
+        raise ValueError(f"eps must be >= 0 for norm='{norm}', got {eps_f}.")
 
     if norm in ("linf", "l2", "l1"):
-        return torch.full(view_shape, float(eps), device=x.device, dtype=real_dtype)
+        return torch.full(view_shape, eps_f, device=x.device, dtype=real_dtype)
 
     x_norm = _batch_l2_norm(x).to(real_dtype)
     if norm == "relative_l2":
-        return (float(eps) * x_norm).view(view_shape)
+        return (eps_f * x_norm).view(view_shape)
 
     # JSR_dB = 10 * log10(P_jam / P_sig) = 20 * log10(||delta||_2 / ||x||_2)
-    if math.isinf(eps) and eps < 0:
-        scale = 0.0
+    if math.isinf(eps_f) and eps_f < 0:
+        scale_f = 0.0
     else:
-        scale = math.pow(10.0, float(eps) / 20.0)
-    return (scale * x_norm).view(view_shape)
+        scale_f = math.pow(10.0, eps_f / 20.0)
+    return (scale_f * x_norm).view(view_shape)
 
 
 def step_direction(grad: torch.Tensor, norm: str) -> torch.Tensor:
@@ -143,15 +167,23 @@ def _project_l1_box(
     eps_flat = eps_budget.reshape(b, 1)
     real_dtype = _real_dtype_for(delta)
 
+    lo_b: torch.Tensor | None = None
+    hi_b: torch.Tensor | None = None
     if clip_bounds is not None:
         low, high = clip_bounds
         if low > high:
             raise ValueError(f"Invalid clip_bounds={clip_bounds}: min > max.")
+        excess_l1 = (x.clamp(min=low, max=high) - x).abs().reshape(b, -1).sum(dim=1, keepdim=True).to(real_dtype)
+        if bool((excess_l1 > eps_flat + 1e-4).any().item()):
+            raise ValueError(
+                f"Clean inputs lie outside clip_bounds={clip_bounds} by more than the L1 budget "
+                f"(required L1 shift up to {float(excess_l1.max().item()):.4g} > budget "
+                f"{float(eps_flat.min().item()):.4g}). Pass clip_bounds=None for standardized or unbounded inputs."
+            )
         lo_b = (low - x).reshape(b, -1)
         hi_b = (high - x).reshape(b, -1)
         z_cand = z.clamp(min=lo_b, max=hi_b)
     else:
-        lo_b = hi_b = None
         z_cand = z
 
     cand_l1 = z_cand.abs().sum(dim=1, keepdim=True).to(real_dtype)
@@ -222,8 +254,39 @@ def project_perturbation(
         low, high = clip_bounds
         if low > high:
             raise ValueError(f"Invalid clip_bounds={clip_bounds}: min > max.")
+        x_box = x.clamp(min=low, max=high)
+        excess = x_box - x
+        if norm == "linf":
+            if bool((excess.abs() > eps_budget + 1e-5).any().item()):
+                raise ValueError(
+                    f"Clean inputs lie outside clip_bounds={clip_bounds} by more than the Linf budget "
+                    f"(min={float(x.min().item()):.4g}, max={float(x.max().item()):.4g}). "
+                    "Pass clip_bounds=None for standardized or unbounded inputs."
+                )
+        else:
+            excess_l2 = _batch_l2_norm(excess).to(_real_dtype_for(x)).view_as(eps_budget)
+            if bool((excess_l2 > eps_budget + 1e-4).any().item()):
+                raise ValueError(
+                    f"Clean inputs lie outside clip_bounds={clip_bounds} by more than the {norm} budget "
+                    f"(required shift L2 up to {float(excess_l2.max().item()):.4g}). "
+                    "Pass clip_bounds=None for standardized or unbounded inputs."
+                )
         x_adv = torch.clamp(x + delta, min=low, max=high)
         delta = x_adv - x
+        if norm != "linf" and bool((excess != 0).any().item()):
+            post_l2 = _batch_l2_norm(delta).to(_real_dtype_for(x)).view_as(eps_budget)
+            if bool((post_l2 > eps_budget + 1e-5).any().item()):
+                t_lo = torch.zeros_like(eps_budget)
+                t_hi = torch.ones_like(eps_budget)
+                diff_box = x_adv - x_box
+                for _ in range(28):
+                    t_mid = 0.5 * (t_lo + t_hi)
+                    cand_delta = excess + t_mid * diff_box
+                    cand_l2 = _batch_l2_norm(cand_delta).to(_real_dtype_for(x)).view_as(eps_budget)
+                    too_big = cand_l2 > eps_budget
+                    t_lo = torch.where(too_big, t_lo, t_mid)
+                    t_hi = torch.where(too_big, t_mid, t_hi)
+                delta = excess + t_lo * diff_box
 
     return delta
 

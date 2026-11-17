@@ -285,7 +285,11 @@ def audit_robustness(
         whitebox_beats_random = False
 
     whitebox_beats_blackbox = square_acc >= best_whitebox_acc - tol_bb
-    monotonic_over_budget = (acc_mid <= acc_low + tol_bb) and (acc_high <= acc_low + tol_bb)
+    monotonic_over_budget = (
+        (acc_mid <= acc_low + tol_bb)
+        and (acc_high <= acc_mid + tol_bb)
+        and (acc_high <= acc_low + tol_bb)
+    )
 
     if not autograd_healthy:
         red_flags.append("broken_or_vanishing_gradients")

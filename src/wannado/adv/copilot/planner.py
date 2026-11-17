@@ -5,11 +5,11 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 from wannado.adv.catalog.build_catalog import load_catalog, query_catalog
 from wannado.adv.copilot.project_inspector import ModelContextProbe, ProjectScan
@@ -60,8 +60,7 @@ class RuntimeEstimate:
             else "N/A (autograd disconnected)"
         )
         lines = [
-            f"[Runtime Forecast] device={self.device}, N={self.num_samples} samples, "
-            f"fwd={self.forward_ms_per_sample:.2f} ms/sample, fwd+bwd={fb_str}",
+            f"[Runtime Forecast] device={self.device}, N={self.num_samples} samples, fwd={self.forward_ms_per_sample:.2f} ms/sample, fwd+bwd={fb_str}",
         ]
         for atk, sec in self.per_attack_seconds.items():
             lines.append(f"  - {atk:<14s}: ~{sec:.1f}s")
@@ -504,7 +503,7 @@ def _estimate_attack_seconds(
         max_bs = int(kw.get("max_batch_size", 512))
         probes_per_step = 2.0 * nb * num_samples
         batches_per_step = max(1, math.ceil(probes_per_step / max(max_bs, 1)))
-        eff_bs = min(max_bs, max(1, int(round(probes_per_step / batches_per_step))))
+        eff_bs = min(max_bs, max(1, round(probes_per_step / batches_per_step)))
         step_ms = batches_per_step * (fwd_launch_ms + eff_bs * fwd_slope_ms)
         return round(max((steps * step_ms) / 1000.0, 0.01), 2)
 
@@ -645,14 +644,14 @@ def estimate_runtime(
         for p, g in zip(model_or_fn.parameters(), saved_grads):
             p.grad = g
 
-    timing_params = dict(
-        fwd_launch_ms=fwd_launch_ms,
-        fwd_slope_ms=fwd_slope_ms,
-        fb_launch_ms=fb_launch_ms,
-        fb_slope_ms=fb_slope_ms,
-        t_fwd_1_ms=t_fwd_1_ms,
-        t_fb_1_ms=t_fb_1_ms,
-    )
+    timing_params = {
+        "fwd_launch_ms": fwd_launch_ms,
+        "fwd_slope_ms": fwd_slope_ms,
+        "fb_launch_ms": fb_launch_ms,
+        "fb_slope_ms": fb_slope_ms,
+        "t_fwd_1_ms": t_fwd_1_ms,
+        "t_fb_1_ms": t_fb_1_ms,
+    }
     per_attack: dict[str, float] = {
         aid: _estimate_attack_seconds(
             aid, merged_kwargs.get(aid, {}), num_samples=num_samples, **timing_params
@@ -688,7 +687,7 @@ def estimate_runtime(
         if num_samples > 100:
             hints.append(f"reducing N={num_samples} -> 64/100")
         elif num_samples > 32:
-            hints.append(f"starting with N=32 for a quick smoke check")
+            hints.append("starting with N=32 for a quick smoke check")
         if goal_hint == "paper_sota":
             hints.append("running goal='standard' before a full paper_sota run")
         if dev.type == "cpu":

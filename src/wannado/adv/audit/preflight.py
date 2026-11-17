@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 from wannado.adv.catalog.build_catalog import load_catalog
 from wannado.adv.core.losses import resolve_loss_fn
@@ -99,7 +99,7 @@ def _probe_gradients(
         x_in = x_probe.detach().requires_grad_(True)
         try:
             outputs = model_or_fn(x_in)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — surface any user model failure in preflight report
             result["error"] = f"Forward pass failed during preflight: {type(exc).__name__}: {exc}"
             return result
 
@@ -148,7 +148,7 @@ def _probe_gradients(
         result["grad_norm_mean"] = float(g_norms.mean().item())
         result["zero_grad_fraction"] = float((g_norms < 1e-10).float().mean().item())
 
-        if will_probe_margin:
+        if will_probe_margin and y_probe is not None:
             margin_vec = resolve_loss_fn("margin")(outputs, y_probe)
             (m_grad,) = torch.autograd.grad(
                 margin_vec.sum(),

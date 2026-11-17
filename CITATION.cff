@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use wannado-adv in your research, please cite it using this metadata."
+title: "wannado-adv: AI-Native Modular Adversarial Robustness Evaluation Platform"
+version: 1.0.4
+date-released: "2026-11-17"
+license: MIT
+repository-code: "https://github.com/JietaoZhao/wannado-adv"
+url: "https://github.com/JietaoZhao/wannado-adv"
+authors:
+  - alias: "JettZ"
+    name: "Jietao Zhao"
+keywords:
+  - adversarial-learning
+  - robustness
+  - carlini-audit
+  - wireless-communications
+  - complex-valued-neural-networks
+  - ai-native

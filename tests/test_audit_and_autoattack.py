@@ -7,6 +7,10 @@ import unittest
 
 import torch
 
+from tests.test_attack_contracts import (
+    TinyComplexWirelessClassifier,
+    _make_trained_real_classifier,
+)
 from wannado.adv import (
     AuditReport,
     PreflightReport,
@@ -14,10 +18,6 @@ from wannado.adv import (
     autoattack,
     compute_perturbation_norm,
     preflight,
-)
-from tests.test_attack_contracts import (
-    TinyComplexWirelessClassifier,
-    _make_trained_real_classifier,
 )
 
 

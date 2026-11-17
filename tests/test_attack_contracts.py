@@ -12,8 +12,8 @@ import unittest
 from pathlib import Path
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from wannado.adv import (
     build_registry_json,
