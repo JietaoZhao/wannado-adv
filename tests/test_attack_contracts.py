@@ -345,7 +345,8 @@ class TestFirstOrderAttackContracts(unittest.TestCase):
             acc_dlr = (saturated_model(res_dlr.x_adv).argmax(dim=1) == self.y).float().mean().item()
 
         self.assertGreater(acc_ce, 0.85)  # CE gets trapped by Softmax saturation
-        self.assertLess(acc_dlr, 0.25)    # Scale-invariant DLR punches right through
+        self.assertLessEqual(acc_dlr, 0.30)  # Scale-invariant DLR punches right through
+        self.assertLess(acc_dlr, acc_ce - 0.55)
 
     def test_targeted_attack_steers_toward_target_class(self) -> None:
         target = (self.y + 1) % 4

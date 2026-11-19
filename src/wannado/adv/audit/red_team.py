@@ -22,7 +22,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from torch import nn
@@ -33,15 +33,9 @@ from wannado.adv.catalog.build_catalog import load_catalog
 from wannado.adv.core.losses import predict_labels, unwrap_model_outputs
 from wannado.adv.core.projections import compute_perturbation_norm, safe_l2_norm
 from wannado.adv.core.utils import DefendedModelWrapper, eval_mode, iter_eval_batches
-from wannado.adv.reporter.paper_reporter import (
-    AttackRunRecord,
-    EvaluationReport,
-    _build_call_kwargs,
-    _per_sample_cosine,
-    _per_sample_mse,
-    _resolve_attack_entry,
-    _serialize_bounds,
-)
+
+if TYPE_CHECKING:
+    from wannado.adv.reporter.paper_reporter import AttackRunRecord, EvaluationReport
 
 
 def wilson_ci(successes: int, total: int, *, z: float = 1.959963984540054) -> tuple[float, float]:
@@ -131,6 +125,8 @@ class RedTeamReport:
 
     def to_evaluation_report(self) -> EvaluationReport:
         """Convert into a standard ``EvaluationReport`` for LaTeX/BibTeX export compatibility."""
+        from wannado.adv.reporter.paper_reporter import EvaluationReport
+
         return EvaluationReport(
             model_name=self.model_name,
             dataset_name=self.dataset_name,
@@ -153,6 +149,8 @@ class RedTeamReport:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        from wannado.adv.reporter.paper_reporter import _serialize_bounds
+
         return {
             "model_name": self.model_name,
             "dataset_name": self.dataset_name,
@@ -375,13 +373,16 @@ def _build_adaptive_escalation_plan(
 
     if sat and not is_hard:
         if norm == "l1":
-            _add("apgd_l1", "Softmax saturation detected; escalating to scale-invariant APGD-L1 (DLR).", {"steps": max(15, int(35 * steps_scale)), "loss": "dlr"})
+            _add("apgd_l1", "Softmax saturation detected; escalating to scale-invariant APGD-L1 (DLR).", {"steps": max(20, int(35 * steps_scale)), "restarts": 2, "loss": "dlr"})
         else:
-            _add("apgd_dlr", "Softmax saturation detected; escalating to scale-invariant APGD-DLR to defeat logit rescaling.", {"steps": max(20, int(35 * steps_scale)), "restarts": 1 if goal == "sanity" else 2})
+            _add("apgd_dlr", "Softmax saturation detected; escalating to multi-restart scale-invariant APGD-DLR to defeat logit rescaling.", {"steps": max(25, int(40 * steps_scale)), "restarts": 2})
 
     if not grad_broken:
         _add("fgsm", "Fast 1-step linear sensitivity baseline.", {})
-        _add("pgd", "Standard iterative first-order white-box baseline.", {"steps": max(10, int(20 * steps_scale))})
+        if sat:
+            _add("pgd", "Softmax saturation detected; running margin-loss PGD immune to Softmax gradient vanishing.", {"steps": max(15, int(25 * steps_scale)), "loss": "margin"})
+        else:
+            _add("pgd", "Standard iterative first-order white-box baseline.", {"steps": max(10, int(20 * steps_scale))})
         if norm == "l1":
             _add("apgd_l1", "L1 geometry SOTA (Mind-the-Box APGD-L1).", {"steps": max(15, int(35 * steps_scale)), "loss": "dlr"})
         else:
@@ -444,6 +445,14 @@ def auto_red_team(
     verbose: bool = True,
 ) -> RedTeamReport:
     """Run one-click closed-loop autonomous adversarial red-teaming on any victim model or DataLoader."""
+    from wannado.adv.reporter.paper_reporter import (
+        AttackRunRecord,
+        _build_call_kwargs,
+        _per_sample_cosine,
+        _per_sample_mse,
+        _resolve_attack_entry,
+    )
+
     if goal not in ("sanity", "standard", "paper_sota"):
         raise ValueError(f"goal must be 'sanity', 'standard', or 'paper_sota', got '{goal}'.")
 

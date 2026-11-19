@@ -167,13 +167,13 @@ class TestZeroSciPyStatsAndSmoothing(unittest.TestCase):
 
 class TestAdversarialTrainingDefenses(unittest.TestCase):
     def test_pgd_at_trades_mart_harden_and_pass_carlini2(self) -> None:
-        # Robust features (first 24 dims, wide margin) + 4 fragile shortcut features (last 4 dims,
-        # clean-separable at +/-0.14 but completely flipped inside eps=0.20 — textbook ERM vs AT test).
+        # Robust features (first 24 dims, wide margin with noise) + 4 clean-separable fragile shortcut
+        # features (last 4 dims, +/-0.18 amplitude flipped completely inside eps=0.20 — textbook ERM vs AT).
         x_tr_rob, y_tr, x_te_rob, y_te = _make_dataset(n_train=384, n_test=48, in_dim=24, seed=42)
         oh_tr = F.one_hot(y_tr, num_classes=4).float()
         oh_te = F.one_hot(y_te, num_classes=4).float()
-        x_tr = torch.cat([x_tr_rob, (0.38 + 0.24 * oh_tr)], dim=1).clamp(0.0, 1.0)
-        x_te = torch.cat([x_te_rob, (0.38 + 0.24 * oh_te)], dim=1).clamp(0.0, 1.0)
+        x_tr = torch.cat([x_tr_rob, (0.32 + 0.36 * oh_tr)], dim=1).clamp(0.0, 1.0)
+        x_te = torch.cat([x_te_rob, (0.32 + 0.36 * oh_te)], dim=1).clamp(0.0, 1.0)
 
         loader = DataLoader(TensorDataset(x_tr, y_tr), batch_size=64, shuffle=False)
         eps = 0.20
@@ -320,6 +320,26 @@ class TestDefenseDiscoveryCitationsEjectionAndDocs(unittest.TestCase):
             check=False,
         )
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+
+    def test_cold_imports_have_no_circular_errors_and_all_exports_resolve(self) -> None:
+        # Regression: importing reporter before audit previously triggered a circular import
+        # (paper_reporter -> audit.carlini_auditor -> audit.__init__ -> red_team -> paper_reporter).
+        for stmt in (
+            "from wannado.adv import evaluate_suite, export_citations, EvaluationReport, AttackRunRecord",
+            "import wannado.adv.reporter; import wannado.adv.audit",
+            "from wannado.adv.audit import auto_red_team, verify_robustness_gate",
+            "import wannado.adv as w; missing = [n for n in w.__all__ if not hasattr(w, n)]; assert not missing, missing",
+            "import wannado.adv.attacks as a; missing = [n for n in a.__all__ if not hasattr(a, n)]; assert not missing, missing",
+        ):
+            with self.subTest(stmt=stmt):
+                proc = subprocess.run(
+                    [sys.executable, "-c", stmt],
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(proc.returncode, 0, msg=f"{stmt}\n{proc.stderr}")
 
     def test_streamlined_agent_kit_and_version_sync(self) -> None:
         self.assertEqual(__version__, "1.2.0")
