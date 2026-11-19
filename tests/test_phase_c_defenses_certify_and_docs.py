@@ -342,7 +342,7 @@ class TestDefenseDiscoveryCitationsEjectionAndDocs(unittest.TestCase):
                 self.assertEqual(proc.returncode, 0, msg=f"{stmt}\n{proc.stderr}")
 
     def test_streamlined_agent_kit_and_version_sync(self) -> None:
-        self.assertEqual(__version__, "1.2.0")
+        self.assertEqual(__version__, "1.2.1")
         skill_text = (REPO_ROOT / "src" / "wannado" / "adv" / "agent_kit" / "SKILL.md").read_text(encoding="utf-8")
         agents_text = (
             REPO_ROOT / "src" / "wannado" / "adv" / "agent_kit" / "templates" / "AGENTS.md"

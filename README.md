@@ -1,8 +1,8 @@
 # WannaDo Series: Autonomous AI Red-Teaming, Hardening & Certification Platform — `wannado-adv`
 
-> Part of the **WannaDo** human–AI collaborative scientific research platform · **Release `v1.2.0`**
+> Part of the **WannaDo** human–AI collaborative scientific research platform · **Release `v1.2.1`**
 
-[![Version](https://img.shields.io/badge/version-1.2.0-2563eb)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-1.2.1-2563eb)](pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-0f766e)](pyproject.toml)
 [![Attacks](https://img.shields.io/badge/attacks-35%20single--file-059669)](#quick-usage-python--cli)
 [![Defenses](https://img.shields.io/badge/defenses-4%20single--file%20%2B%20L2%20cert-7c3aed)](#quick-usage-python--cli)

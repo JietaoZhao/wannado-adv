@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wannado-adv"
-version = "1.2.0"
+version = "1.2.1"
 description = "AI-native autonomous adversarial red-teaming, Carlini 2.0 auditing, single-file defenses, and certified L2 smoothing across CV, wireless RF, DRL, and tabular models."
 readme = "README.md"
 requires-python = ">=3.10"

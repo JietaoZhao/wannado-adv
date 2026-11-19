@@ -2,6 +2,13 @@
 
 All notable changes to `wannado-adv` will be documented in this file.
 
+## [1.2.1] - 2026-11-19
+
+### Fixed
+- **Cold-start `reporter <-> audit` circular import**: Converted `audit.red_team` and `audit.verify_gate` to PEP 562 lazy exports inside `wannado.adv.audit` (preserving eager callable `audit.preflight` / `audit.audit_robustness`) and deferred internal `paper_reporter` imports in `audit/red_team.py`, eliminating order-dependent `ImportError` across Linux CI test collection and standalone imports.
+- **`__all__` export hygiene**: Removed stale unexported entries (`apgd_t`, `fab_t`, `square_t`) from `wannado.adv.__all__` and `wannado.adv.attacks.__all__`.
+- **Stronger Softmax-saturation escalation (`auto_red_team`)**: When `softmax_saturation` is detected, even `goal="sanity"` now escalates multi-restart `apgd_dlr(steps>=25, restarts=2)` and switches `pgd` to `loss="margin"` across all CPU thread/BLAS reduction schedules.
+
 ## [1.2.0] - 2026-11-19
 
 ### Added
