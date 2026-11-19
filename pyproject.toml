@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wannado-adv"
-version = "1.0.6"
-description = "AI-focused, single-file modular adversarial robustness platform across CV, wireless communications, DRL, tabular, and unsupervised learning."
+version = "1.2.0"
+description = "AI-native autonomous adversarial red-teaming, Carlini 2.0 auditing, single-file defenses, and certified L2 smoothing across CV, wireless RF, DRL, and tabular models."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -16,13 +16,15 @@ authors = [
 keywords = [
     "adversarial-learning",
     "robustness",
+    "red-teaming",
+    "certified-robustness",
     "deep-learning",
     "wireless-communications",
     "ai-native",
     "ai-ide",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
@@ -70,7 +72,7 @@ namespaces = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 
 [tool.mypy]
 python_version = "3.10"

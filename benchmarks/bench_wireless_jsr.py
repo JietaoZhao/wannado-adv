@@ -21,10 +21,9 @@ import time
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from wannado.adv import (
     apgd_dlr,
@@ -260,22 +259,22 @@ def run_benchmark(num_test: int = 120, seed: int = 42) -> None:
     for jsr_db in jsr_levels:
         print(f"\n--- JSR = {jsr_db:+.1f} dB ---")
         attacks = [
-            ("FGSM (White-Box 1-step)", lambda: fgsm(model, x_test, y_test, eps=jsr_db, norm="jsr_db")),
-            ("PGD-20 (White-Box)", lambda: pgd(model, x_test, y_test, eps=jsr_db, steps=20, norm="jsr_db", seed=seed)),
-            ("VMI-FGSM (Transfer)", lambda: vmi_fgsm(model, x_test, y_test, eps=jsr_db, steps=15, num_variance_samples=6, norm="jsr_db", seed=seed)),
-            ("APGD-DLR (Auto Step)", lambda: apgd_dlr(model, x_test, y_test, eps=jsr_db, steps=20, restarts=1, norm="jsr_db", seed=seed)),
-            ("AutoAttack (Ensemble)", lambda: autoattack(model, x_test, y_test, eps=jsr_db, norm="jsr_db", version="fast", apgd_steps=20, apgd_restarts=1, square_queries=250, seed=seed)),
-            ("Square Attack (Score BB)", lambda: square_attack(model, x_test, y_test, eps=jsr_db, max_queries=250, norm="jsr_db", seed=seed)),
-            ("NES-25 (Score BB)", lambda: nes(model, x_test, y_test, eps=jsr_db, steps=25, nb_sample=32, sigma=0.04, norm="jsr_db", seed=seed)),
-            ("Boundary (Label-Only BB)", lambda: boundary(_hard_oracle, x_test, y_test, eps=jsr_db, steps=60, norm="jsr_db", seed=seed)),
-            ("Naive PGD on Quant-ADC", lambda: pgd(defended_rx, x_test, y_test, eps=jsr_db, steps=10, norm="jsr_db", random_start=False, seed=seed)),
+            ("FGSM (White-Box 1-step)", lambda j=jsr_db: fgsm(model, x_test, y_test, eps=j, norm="jsr_db")),
+            ("PGD-20 (White-Box)", lambda j=jsr_db: pgd(model, x_test, y_test, eps=j, steps=20, norm="jsr_db", seed=seed)),
+            ("VMI-FGSM (Transfer)", lambda j=jsr_db: vmi_fgsm(model, x_test, y_test, eps=j, steps=15, num_variance_samples=6, norm="jsr_db", seed=seed)),
+            ("APGD-DLR (Auto Step)", lambda j=jsr_db: apgd_dlr(model, x_test, y_test, eps=j, steps=20, restarts=1, norm="jsr_db", seed=seed)),
+            ("AutoAttack (Ensemble)", lambda j=jsr_db: autoattack(model, x_test, y_test, eps=j, norm="jsr_db", version="fast", apgd_steps=20, apgd_restarts=1, square_queries=250, seed=seed)),
+            ("Square Attack (Score BB)", lambda j=jsr_db: square_attack(model, x_test, y_test, eps=j, max_queries=250, norm="jsr_db", seed=seed)),
+            ("NES-25 (Score BB)", lambda j=jsr_db: nes(model, x_test, y_test, eps=j, steps=25, nb_sample=32, sigma=0.04, norm="jsr_db", seed=seed)),
+            ("Boundary (Label-Only BB)", lambda j=jsr_db: boundary(_hard_oracle, x_test, y_test, eps=j, steps=60, norm="jsr_db", seed=seed)),
+            ("Naive PGD on Quant-ADC", lambda j=jsr_db: pgd(defended_rx, x_test, y_test, eps=j, steps=10, norm="jsr_db", random_start=False, seed=seed)),
             (
                 "BPDA-EoT on Quant-ADC",
-                lambda: bpda_eot(
+                lambda j=jsr_db: bpda_eot(
                     model,
                     x_test,
                     y_test,
-                    eps=jsr_db,
+                    eps=j,
                     steps=20,
                     eot_samples=4,
                     defense_fn=quantized_adc_defense,

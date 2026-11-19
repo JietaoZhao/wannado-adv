@@ -30,7 +30,7 @@ class VictimInterface:
     y_eval: torch.Tensor
     norm: str = "linf"
     eps: float = 8.0 / 255.0
-    clip_bounds: tuple[float, float] | None = (0.0, 1.0)
+    clip_bounds: tuple[Any, Any] | None = (0.0, 1.0)
     domain: str = "vision"
     model_name: str = "VictimModel"
     dataset_name: str = "EvalSplit"
@@ -49,11 +49,24 @@ def _resolve_attack_source_path(attack_id: str) -> tuple[dict[str, Any], Path]:
         meta_obj = getattr(mod, "META", None)
         if meta_obj is not None:
             card = meta_obj.to_dict()
+    if mod_path is None:
+        from wannado.adv.defenses import DEFENSE_EXPORTS, DEFENSE_METAS
+
+        if attack_id in DEFENSE_METAS:
+            d_meta = DEFENSE_METAS[attack_id]
+            card = d_meta.to_dict()
+            mod_path = d_meta.module_path
+        elif attack_id in DEFENSE_EXPORTS:
+            mod_path, _ = DEFENSE_EXPORTS[attack_id]
+            mod = importlib.import_module(mod_path)
+            meta_obj = getattr(mod, "META", None)
+            if meta_obj is not None:
+                card = meta_obj.to_dict()
     if card is None or mod_path is None:
         available = ", ".join(sorted(cards.keys())[:10])
         raise KeyError(
-            f"Unknown attack '{attack_id}'. Sample valid IDs: {available} ... "
-            "Use query_catalog() to browse all 35 attacks."
+            f"Unknown attack or defense '{attack_id}'. Sample valid IDs: {available} ... "
+            "Use query_catalog() to browse all 35 attacks or list_defenses() for built-in defenses."
         )
     if mod_path.startswith("wannado.adv."):
         rel_parts = mod_path.removeprefix("wannado.adv.").split(".")
@@ -73,13 +86,13 @@ def eject_attack(
     custom_name: str | None = None,
     overwrite: bool = False,
 ) -> Path:
-    """Copy a standalone CleanRL-style single-file attack into the user's workspace.
+    """Copy a standalone CleanRL-style single-file attack (or defense) into the user's workspace.
 
     The ejected file preserves complete verified academic provenance (``META.citation``),
     extension hooks (``[AI-Prompt Hook]``), and zero-relimport compatibility with
     ``wannado.adv.core`` so the user or AI IDE can upgrade that one file safely.
     """
-    _, src_path = _resolve_attack_source_path(attack_id)
+    card, src_path = _resolve_attack_source_path(attack_id)
     target_dir = Path(dest_dir).resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -94,14 +107,26 @@ def eject_attack(
             "Pass overwrite=True if you intentionally want to replace your local changes."
         )
 
+    kind = "Defense" if "paradigm" in card else "Attack"
     banner = (
-        f"# [wannado-adv Ejected Single-File Attack: id='{attack_id}']\n"
+        f"# [wannado-adv Ejected Single-File {kind}: id='{attack_id}']\n"
         f"# Edit ONLY this standalone file to prototype improvements from new papers without\n"
         f"# touching the rest of your project. Remember to update `META` if you change\n"
         f"# authorship/citation or add hyperparameters for automatic paper reporting.\n\n"
     )
     dest_path.write_text(banner + src_path.read_text(encoding="utf-8"), encoding="utf-8")
     return dest_path
+
+
+def eject_defense(
+    defense_id: str,
+    dest_dir: str | Path = "./adv_eval/defenses",
+    *,
+    custom_name: str | None = None,
+    overwrite: bool = False,
+) -> Path:
+    """Copy a standalone single-file adversarial defense/certifier into the user's workspace."""
+    return eject_attack(defense_id, dest_dir=dest_dir, custom_name=custom_name, overwrite=overwrite)
 
 
 def _default_interface_template(domain: str, norm: str, eps: float, clip_bounds: str) -> str:
@@ -215,6 +240,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run isolated wannado-adv robustness evaluation.")
     parser.add_argument("--device", type=str, default=_default_device())
     parser.add_argument("--samples", type=int, default=100)
+    parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--goal", type=str, default="standard", choices=["sanity", "standard", "paper_sota"])
     parser.add_argument("--no-audit", action="store_true", help="Skip Carlini false-robustness checks.")
     parser.add_argument("--seed", type=int, default=42)
@@ -235,10 +261,9 @@ def main() -> None:
         autograd_ok=probe.autograd_connected,
         norm=victim.norm,
     )
-    # Example customization hook: swap a built-in attack ID in `attacks` with an ejected local callable:
-    #   from attacks.fgsm_goodfellow2015 import fgsm as custom_fgsm
-    #   attacks = [custom_fgsm, *suite.attacks[1:]]
-    attacks = suite.attacks
+    attacks = list(suite.attacks)
+    if victim.defense_fn is not None and "bpda_eot" not in attacks:
+        attacks.append("bpda_eot")
 
     eta = estimate_runtime(
         victim.model_or_fn,
@@ -258,6 +283,9 @@ def main() -> None:
         attacks=attacks,
         attack_kwargs=suite.attack_kwargs,
         clip_bounds=victim.clip_bounds,
+        batch_size=args.batch_size,
+        defense_fn=victim.defense_fn,
+        surrogate_fn=victim.surrogate_fn,
         run_audit=(not args.no_audit),
         seed=args.seed,
         domain=victim.domain,

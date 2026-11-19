@@ -136,14 +136,6 @@ def _probe_gradients(
         if not outputs.requires_grad:
             return result
 
-        if y_probe is not None:
-            loss_fn = resolve_loss_fn(loss_name)
-            scalar_vec = loss_fn(outputs, y_probe)
-        else:
-            scalar_vec = outputs.abs().pow(2) if outputs.is_complex() else outputs
-        if scalar_vec.is_complex():
-            scalar_vec = scalar_vec.real
-
         is_cls_target = y_probe is not None and y_probe.dtype in (
             torch.int64,
             torch.int32,
@@ -152,7 +144,20 @@ def _probe_gradients(
             torch.uint8,
             torch.long,
         )
-        will_probe_margin = is_cls_target and outputs.ndim >= 1 and (loss_name in (None, "ce"))
+        effective_loss_name = loss_name
+        if y_probe is not None and not is_cls_target and loss_name in (None, "ce", "margin", "dlr"):
+            effective_loss_name = "mse" if outputs.shape == y_probe.shape else None
+
+        result["probe_loss_used"] = effective_loss_name or ("l2_output" if y_probe is None or not is_cls_target else "ce")
+        if y_probe is not None and (is_cls_target or effective_loss_name is not None):
+            loss_fn = resolve_loss_fn(effective_loss_name)
+            scalar_vec = loss_fn(outputs, y_probe)
+        else:
+            scalar_vec = outputs.abs().pow(2) if outputs.is_complex() else outputs.pow(2)
+        if scalar_vec.is_complex():
+            scalar_vec = scalar_vec.real
+
+        will_probe_margin = is_cls_target and outputs.ndim >= 1 and (effective_loss_name in (None, "ce"))
         try:
             (grad,) = torch.autograd.grad(
                 scalar_vec.sum(),
@@ -200,6 +205,7 @@ def preflight(
     clip_bounds: tuple[Any, Any] | None = None,
     attack: str | None = None,
     loss: str | None = "ce",
+    defense_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
     check_gradients: bool = True,
     probe_batch_size: int = 8,
     strict: bool = False,
@@ -227,6 +233,12 @@ def preflight(
     recommendations: list[str] = []
 
     module_info = _inspect_module(model_or_fn)
+    module_info["has_defense_fn"] = defense_fn is not None
+    effective_model: Callable[[torch.Tensor], torch.Tensor] = model_or_fn
+    if defense_fn is not None:
+        from wannado.adv.core.utils import DefendedModelWrapper
+
+        effective_model = DefendedModelWrapper(model_or_fn, defense_fn)
     summary: dict[str, Any] = {
         "model": module_info,
         "input": {
@@ -346,7 +358,7 @@ def preflight(
     if check_gradients and not errors:
         k = min(x.shape[0], max(1, probe_batch_size))
         y_k = y[:k] if y is not None else None
-        grad_info = _probe_gradients(model_or_fn, x[:k], y_k, loss_name=loss)
+        grad_info = _probe_gradients(effective_model, x[:k], y_k, loss_name=loss)
         summary["gradient_probe"] = grad_info
 
         if grad_info["error"] is not None:

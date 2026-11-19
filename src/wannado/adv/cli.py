@@ -13,6 +13,7 @@ from typing import Any
 from wannado.adv import __version__
 from wannado.adv.agent_kit import install_agent_kit
 from wannado.adv.audit.preflight import preflight as run_preflight
+from wannado.adv.audit.verify_gate import verify_robustness_gate
 from wannado.adv.catalog.build_catalog import build_registry_json, load_catalog, query_catalog
 from wannado.adv.copilot import (
     build_interactive_brief,
@@ -74,13 +75,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # 5. cite
     p_cite = sub.add_parser("cite", help="Export verified citations (BibTeX/IEEE/APA) with zero hallucination.")
-    p_cite.add_argument("attack_ids", nargs="+", help="Algorithm IDs to cite (e.g. fgsm pgd apgd_dlr).")
+    p_cite.add_argument(
+        "attack_ids",
+        nargs="+",
+        help="Attack or defense IDs to cite (e.g. fgsm pgd apgd_dlr trades mart randomized_smoothing).",
+    )
     p_cite.add_argument("--format", default="bibtex", choices=["bibtex", "ieee", "apa"])
     p_cite.add_argument("--include-audit-ref", action="store_true")
 
     # 6. eject
-    p_eject = sub.add_parser("eject", help="Copy a standalone single-file attack into your workspace for custom edits.")
-    p_eject.add_argument("attack_id", help="Attack ID from catalog (e.g. fgsm, pgd, apgd_dlr).")
+    p_eject = sub.add_parser(
+        "eject",
+        help="Copy a standalone single-file attack or defense into your workspace for custom edits.",
+    )
+    p_eject.add_argument(
+        "attack_id",
+        help="Attack or defense ID (e.g. fgsm, pgd, apgd_dlr, pgd_at, trades, mart, randomized_smoothing).",
+    )
     p_eject.add_argument("--dest", default="./adv_eval/attacks", help="Destination folder.")
     p_eject.add_argument("--name", default=None, help="Optional custom output filename.")
     p_eject.add_argument("--overwrite", action="store_true")
@@ -116,7 +127,28 @@ def _build_parser() -> argparse.ArgumentParser:
     p_pf.add_argument("--attack", default=None)
     p_pf.add_argument("--json", action="store_true", dest="as_json")
 
-    # 10. arsenal
+    # 10. verify (autonomous closed-loop red-team + hard CI/agent gate)
+    p_ver = sub.add_parser(
+        "verify",
+        help="Run closed-loop autonomous red-team + Carlini 2.0 hard verification gate on adv_eval/interface.py.",
+    )
+    p_ver.add_argument("--interface", default="./adv_eval/interface.py", dest="interface_path")
+    p_ver.add_argument("--device", default="cpu")
+    p_ver.add_argument("--samples", type=int, default=64)
+    p_ver.add_argument("--batch-size", type=int, default=None, dest="batch_size")
+    p_ver.add_argument("--goal", default="standard", choices=["sanity", "standard", "paper_sota"])
+    p_ver.add_argument("--eps", type=_parse_eps_arg, default=None)
+    p_ver.add_argument("--norm", default=None)
+    p_ver.add_argument("--min-clean-acc", type=float, default=None, dest="min_clean_acc")
+    p_ver.add_argument("--min-robust-acc", type=float, default=None, dest="min_robust_acc")
+    p_ver.add_argument("--max-output-drift", type=float, default=None, dest="max_output_drift")
+    p_ver.add_argument("--allow-red-flags", action="store_true", dest="allow_red_flags")
+    p_ver.add_argument("--no-curve", action="store_true", dest="no_curve")
+    p_ver.add_argument("--seed", type=int, default=42)
+    p_ver.add_argument("--out-dir", default="./adv_eval/outputs", dest="out_dir")
+    p_ver.add_argument("--json", action="store_true", dest="as_json")
+
+    # 11. arsenal
     p_ars = sub.add_parser(
         "arsenal",
         help="Display versioned wannado-adv adversarial arsenal & Carlini false-robustness audit stack.",
@@ -249,6 +281,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             norm=victim.norm,
             clip_bounds=victim.clip_bounds,
             attack=args.attack,
+            defense_fn=victim.defense_fn,
         )
         if args.as_json:
             print(json.dumps(pf.to_dict(), indent=2, ensure_ascii=False))
@@ -256,8 +289,32 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(pf.format_report())
         return 0 if pf.ok else 1
 
+    if args.command == "verify":
+        rep = verify_robustness_gate(
+            interface_path=args.interface_path,
+            device=args.device,
+            samples=args.samples,
+            batch_size=args.batch_size,
+            goal=args.goal,
+            eps=args.eps,
+            norm=args.norm,
+            min_clean_acc=args.min_clean_acc,
+            min_robust_acc=args.min_robust_acc,
+            max_output_drift=args.max_output_drift,
+            fail_on_red_flag=not args.allow_red_flags,
+            sweep_curve=not args.no_curve,
+            seed=args.seed,
+            out_dir=args.out_dir,
+            verbose=not args.as_json,
+        )
+        print(json.dumps(rep.to_dict(), indent=2, ensure_ascii=False) if args.as_json else rep.format_report())
+        return rep.exit_code
+
     if args.command == "arsenal":
+        from wannado.adv.defenses import list_defenses
+
         cards = load_catalog()
+        defenses = list_defenses()
         by_family: dict[str, list[dict[str, Any]]] = {}
         for c in cards:
             by_family.setdefault(c["family"], []).append(c)
@@ -265,20 +322,38 @@ def main(argv: Sequence[str] | None = None) -> int:
             "package": "wannado-adv",
             "version": __version__,
             "total_attacks": len(cards),
+            "total_defenses": len(defenses),
             "families": {
                 fam: [{"id": c["id"], "tier": c["tier"], "threat_model": c["threat_model"]} for c in items]
                 for fam, items in by_family.items()
             },
-            "audits": ["preflight", "audit_robustness (Carlini et al. 2019)"],
+            "defenses": [
+                {"id": d["id"], "tier": d["tier"], "paradigm": d["paradigm"]}
+                for d in defenses
+            ],
+            "audits": [
+                "preflight",
+                "audit_robustness (Carlini 2.0: stochasticity/EOT, BPDA, L1, regression)",
+                "auto_red_team (closed-loop adaptive escalation + Wilson 95% CI + AURC/eps50)",
+                "verify_robustness_gate (wannado-adv verify hard exit-code gate)",
+            ],
         }
         if args.as_json:
             print(json.dumps(arsenal_payload, indent=2, ensure_ascii=False))
         else:
-            print(f"[wannado-adv v{__version__}] Adversarial Robustness Arsenal ({len(cards)} attacks):")
+            print(
+                f"[wannado-adv v{__version__}] Adversarial Robustness Arsenal "
+                f"({len(cards)} attacks + {len(defenses)} single-file defenses):"
+            )
             for fam, items in by_family.items():
                 summary = ", ".join(f"{c['id']}[{c['tier']}]" for c in items)
                 print(f"  - {fam:<18s} ({len(items):2d}): {summary}")
-            print("  Audits & Safeguards: preflight(), audit_robustness() (Carlini et al. 2019)")
+            def_summary = ", ".join(f"{d['id']}[{d['tier']}]" for d in defenses)
+            print(f"  - {'defenses':<18s} ({len(defenses):2d}): {def_summary}")
+            print(
+                "  Audits & Red-Team  : preflight(), audit_robustness() [Carlini 2.0], "
+                "auto_red_team(), verify_robustness_gate() (`wannado-adv verify`)"
+            )
         return 0
 
     return 1

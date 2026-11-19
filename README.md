@@ -1,22 +1,23 @@
-# WannaDo Series: Automated AI-Collaboration Platform for Adversarial Learning — `wannado-adv`
+# WannaDo Series: Autonomous AI Red-Teaming, Hardening & Certification Platform — `wannado-adv`
 
-> Part of the **WannaDo** human–AI collaborative scientific research platform · **Release `v1.0.6`**
+> Part of the **WannaDo** human–AI collaborative scientific research platform · **Release `v1.2.0`**
 
-[![Version](https://img.shields.io/badge/version-1.0.6-2563eb)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-1.2.0-2563eb)](pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-0f766e)](pyproject.toml)
-[![Families](https://img.shields.io/badge/threat%20families-9%20paradigms-7c3aed)](#quick-usage-python--cli)
-[![Attacks](https://img.shields.io/badge/executable%20attacks-35%20single--file-059669)](#quick-usage-python--cli)
+[![Attacks](https://img.shields.io/badge/attacks-35%20single--file-059669)](#quick-usage-python--cli)
+[![Defenses](https://img.shields.io/badge/defenses-4%20single--file%20%2B%20L2%20cert-7c3aed)](#quick-usage-python--cli)
 [![License: MIT](https://img.shields.io/badge/license-MIT-475569)](LICENSE)
 
-*"Wanna do an adversarial robustness test on any of your machine learning projects?"*
+*"Hand your model to an AI agent for a complete, anti-fake-robustness red-team audit, hardening loop, and publication-ready dossier — in one command."*
 
-`wannado-adv` is an **AI-focused adversarial learning platform** built around three core moats:
+`wannado-adv` is an **AI-native adversarial robustness platform** (`numpy` + `torch` only — **zero SciPy**) built around four core moats:
 
-1. **AI-Focused & Co-Pilot Native**: Designed from the ground up for AI IDE agents, with structured collaboration prompts, `AGENTS.md` / `SKILL.md` protocols, and inline engineering notes baked directly into the library. Instead of improvising ad-hoc attack scripts, your AI agent follows built-in guardrails to inspect your project, explain parameters in zero-jargon plain language, forecast hardware runtime ETA, audit for false robustness, and export paper-ready experimental summaries.
-2. **Modular Single-File Architecture & Isolated Interface**: Every attack algorithm lives in one transparent, self-contained single `.py` file and plugs into your project through a single non-intrusive evaluation boundary (`adv_eval/interface.py` via `VictimInterface`)—never polluting your core training or model files. You can see at a glance where each algorithm resides and how it runs; when adapting an idea from a new paper, simply `eject` and optimize that single standalone file while keeping maintenance effortless.
-3. **Hardwired Literature Alignment & Zero Citation Hallucination**: Every attack's verified paper metadata, BibTeX/IEEE/APA citations, baseline-to-SOTA lineage, and intuition notes are hardcoded directly inside the library (`META` + compiled `registry.json`). Both users and AI agents select verified implementations straight from the built-in catalog without relying on live web search—eliminating citation hallucinations and paper-to-code mismatches across long agentic tasks.
+1. **One-Click Autonomous Red-Teaming & Carlini 2.0 Verify Gate**: `auto_red_team()` and `wannado-adv verify` diagnose Softmax saturation, non-differentiable `defense_fn` preprocessing, test-time stochasticity, and hard-label-only oracles automatically — escalating matched attacks (`apgd_dlr`, `bpda_eot` + `square_attack`, `eot_pgd`, `hopskipjump`, `apgd_l1`), reporting true per-sample worst-case ensemble survival with **Wilson 95% confidence intervals** and **`AURC` / `eps_50`** decay curves, and returning hard CI/agent exit codes (`0` PASS / `1` FAIL).
+2. **Closed-Loop Single-File Hardening & Zero-SciPy L2 Certification**: Four standalone single-file defenses under `wannado.adv.defenses` — `pgd_adversarial_train` (Madry 2018), `trades_train` (Zhang 2019), `mart_train` (Wang 2020), and `certify_randomized_smoothing` (Cohen 2019, pure-Python Acklam inverse normal CDF + exact regularized incomplete beta Clopper–Pearson bounds) — designed to pair directly with Carlini 2.0 post-hardening re-audits so gradient masking cannot masquerade as robustness.
+3. **CleanRL-Style Single-File Modularity & Isolated Boundary**: All 35 attacks and 4 defenses live in transparent single `.py` files and plug into any project through ONE non-intrusive adapter (`adv_eval/interface.py` via `VictimInterface` with `DataLoader` / `batch_size` / `defense_fn` support). Need to adapt a new paper? `wannado-adv eject <attack_or_defense_id>` extracts that single file cleanly.
+4. **Hardwired Literature Provenance & Zero Citation Hallucination**: Verified paper metadata, BibTeX/IEEE/APA citations, and baseline-to-SOTA lineage live directly inside `META` + `registry.json` (`wannado-adv cite <ids>`), eliminating fabricated references across long agentic workflows.
 
-> Domain-agnostic by design: supports standard `[0, 1]` vision models alongside native `torch.complex64` wireless baseband signals (`jsr_db`), tabular, time-series, unsupervised losses, and DRL policies through the same clean interface.
+> Domain-agnostic by design: supports standard `[0, 1]` vision models alongside native `torch.complex64` wireless baseband signals (`norm="jsr_db"`), tabular (per-feature bounds & immutable masks), time-series, continuous regression / DRL policies, and HuggingFace `ModelOutput` models.
 
 ## Installation
 
@@ -24,7 +25,7 @@
 pip install wannado-adv
 ```
 
-> **Optional Two-Stage Ecosystem Workflow (`wannado-drl` + `wannado-adv`)**: Both packages remain 100% independent—you never need `wannado-drl` to use `wannado-adv`, and vice versa. When installed side-by-side (e.g., training a policy with `wannado-drl` in `./drl_lab/` before auditing its perturbation robustness with `wannado-adv` in `./adv_eval/`), their namespaces (`wannado.adv` / `wannado.drl`), skills (`.agents/skills/wannado-adv/` vs `.agents/skills/wannado-drl/`), and marked rule blocks (`<!-- wannado-adv:start/end -->` vs `<!-- wannado-drl:start/end -->`) are strictly isolated with explicit intent boundaries so their AI Co-Pilot prompts never overwrite or conflict with one another.
+> **Independent Products, Optional Clean Coexistence**: `wannado-adv`, `wannado-drl`, and `wannado-wce` are completely independent packages. If `wannado-drl` is installed alongside `wannado-adv`, their namespaces (`wannado.adv` vs `wannado.drl`), skills (`.agents/skills/wannado-adv/` vs `.agents/skills/wannado-drl/`), and marked rule blocks (`<!-- wannado-adv:start/end -->`) are strictly isolated so AI agents never collide.
 
 <details>
 <summary>Development setup (editable install from source)</summary>
@@ -37,101 +38,90 @@ pip install -e ".[dev]" --no-build-isolation
 
 </details>
 
-## Next Step: Launch the Universal AI IDE Co-Pilot
+## Next Step: Launch One-Click Autonomous AI Red-Teaming
 
-Built on the **cross-IDE open `AGENTS.md` + `.agents/skills/` standard** (works across **Cursor, Antigravity, VS Code Codex, Claude Code, Windsurf, Aider**, and future AI IDEs). Once `pip install wannado-adv` completes, follow these two steps inside **your own ML project root**:
+Built on the **cross-IDE open `AGENTS.md` + `.agents/skills/` standard** (works across **Cursor, Antigravity, VS Code Codex, Claude Code, Windsurf, Aider**, and other coding agents). Inside **your own ML project root**:
 
-### Step 1 — Bind Universal `wannado-adv` Co-Pilot Rules (one-time)
+### Step 1 — Bind Universal `wannado-adv` Agent Rules (one-time)
 
 ```bash
 wannado-adv init-agent --dir .
 ```
 
-This writes the **open-standard `AGENTS.md` + `.agents/skills/wannado-adv/SKILL.md`** plus lightweight discovery adapters for **Cursor** (`.cursor/rules/wannado-adv.mdc`), **Antigravity** (`.agent/skills/`), **Claude Code** (`CLAUDE.md`, `.claude/skills/`), **VS Code + Codex**, **Windsurf**, etc., without modifying any of your training or model code.  
-*(Prefer only open-standard files with no IDE-specific folders? Pass `--ide universal`.)*
+This writes `AGENTS.md` + `.agents/skills/wannado-adv/SKILL.md` plus discovery adapters for **Cursor** (`.cursor/rules/wannado-adv.mdc`), **Antigravity** (`.agent/skills/`), and **Claude Code** (`CLAUDE.md`, `.claude/skills/`) without touching your training code. *(Prefer only open-standard files? Pass `--ide universal`.)*
 
 ### Step 2 — Prompt Your AI IDE Agent
 
-Open the AI chat in any AI IDE and say:
+> **"Run a full autonomous adversarial red-team test on this project and harden the model if it fails."**
 
-> **"Do an adversarial learning robustness test on this project..."**
+### What Happens Next (Autonomous Closed-Loop Flow)
 
-*(Even if you skipped Step 1 in a brand-new IDE, simply tell the agent: `"Initialize wannado-adv agent rules first (wannado-adv init-agent --dir .), then do an adversarial learning robustness test on this project."`)*
-
-### What Happens Next (Automated 4-Phase Co-Pilot Flow)
-
-1. **Traverse & Probe**: The agent runs `wannado-adv inspect .` (`scan_project` + `probe_model_context`) to inspect your repo structure, framework, tensor shape/dtype (`float32` vs `torch.complex64`), SOTA attack lineage, and gradient health.
-2. **Zero-Jargon Clarification & Runtime ETA**: Before heavy runs, the agent replies in **your conversation language**, explains every knob with **plain everyday analogies and small-vs-large trade-offs** (`eps` / `jsr_db`, `steps`, test scale `N`), keeps academic terms in parentheses for reference, ensures every choice explains its practical effect, and gives a live hardware forecast (`estimate_runtime()`).
-3. **Non-Intrusive Boundary & Single-File Algorithms**: It creates an isolated `adv_eval/` workspace (`wannado-adv scaffold`) via `VictimInterface` so your project stays clean. Want to adapt one paper's idea? Run `wannado-adv eject pgd` to extract that attack into a standalone editable `.py` file.
-4. **Carlini Audit & Paper-Ready Exports**: Opens with a clear plain-language takeaway, checks for fake robustness via `audit_robustness()` (gradient masking / softmax saturation), and exports `evaluation_report.json`, `paper_summary.md`, `paper_table.tex` (`booktabs`), and verified `references.bib` (zero citation hallucination).
+1. **Inspect & Probe**: Runs `wannado-adv inspect .` (`scan_project` + `probe_model_context`) to infer domain, tensor dtype (`float32` vs `torch.complex64`), bounds, checkpoints, and gradient health.
+2. **Isolate Boundary**: Scaffolds `./adv_eval/interface.py` (`wannado-adv scaffold`) wrapping your model, optional `defense_fn` / `surrogate_fn`, and `DataLoader` cleanly without modifying training scripts.
+3. **One-Click Red-Team & Verify Gate**: Executes `wannado-adv verify --interface ./adv_eval/interface.py --goal standard` (`auto_red_team()` + Carlini 2.0), automatically bypassing fake defenses and exporting `red_team_report.json`, `paper_summary.md`, `paper_table.tex`, `references.bib`, `robustness_curve.csv`, and `robustness_curve.png`.
+4. **Closed-Loop Hardening & Carlini 2.0 Re-Audit**: If the gate fails, hardens with `trades_train` / `pgd_adversarial_train` / `mart_train` (or certifies L2 radii via `certify_randomized_smoothing`), then immediately re-runs `wannado-adv verify` to confirm genuine robustness (`passed=True`).
 
 ## Quick Usage (Python & CLI)
 
 ```python
-from wannado.adv import fgsm, pgd, autoattack, preflight, audit_robustness, query_catalog
+from wannado.adv import (
+    auto_red_team,
+    certify_randomized_smoothing,
+    gaussian_augmented_train,
+    pgd,
+    trades_train,
+)
 
-# 1. AI-native preflight check & Carlini-style robustness audit
-report = preflight(model, x, y, attack="pgd", eps=0.03, norm="linf", clip_bounds=(0.0, 1.0))
-audit = audit_robustness(model, x, y, eps=0.03, norm="linf", clip_bounds=(0.0, 1.0))
+# 1. One-click autonomous red-team (supports DataLoader, defense_fn, regression/DRL, complex64 IQ)
+rt = auto_red_team(model, test_loader, eps=8/255, norm="linf", clip_bounds=(0.0, 1.0))
+rt.save("./adv_eval/outputs")  # JSON, Markdown, LaTeX, BibTeX, AURC/eps_50 curve CSV & PNG
 
-# 2. Standard vision or AutoAttack ensemble
-res_fgsm = fgsm(model, x, y, eps=0.03, norm="linf", clip_bounds=(0.0, 1.0))
-res_aa = autoattack(model, x, y, eps=0.03, norm="linf", clip_bounds=(0.0, 1.0))
+# 2. Closed-loop hardening (PGD-AT / TRADES / MART) + Carlini 2.0 re-audit
+trades_train(model, train_loader, eps=8/255, beta=6.0, norm="linf", clip_bounds=(0.0, 1.0))
+rt_after = auto_red_team(model, test_loader, eps=8/255, norm="linf", clip_bounds=(0.0, 1.0))
 
-# 3. Wireless communication complex IQ signal with Jamming-to-Signal Ratio (-10 dB)
-res_pgd = pgd(wireless_rx, iq_signal, mod_labels, eps=-10.0, norm="jsr_db", steps=20)
+# 3. Provable L2 certification via Randomized Smoothing (pure Python — zero SciPy)
+gaussian_augmented_train(model, train_loader, sigma=0.25, clip_bounds=(0.0, 1.0))
+cert = certify_randomized_smoothing(model, x_test, y_test, sigma=0.25, n0=100, n=1000, alpha=0.001)
 
-# 4. Query the algorithm knowledge graph
-cards = query_catalog(family="first_order", tier="S")
+# 4. Native torch.complex64 wireless baseband jamming under Jamming-to-Signal Ratio (-10 dB)
+res_rf = pgd(wireless_rx, iq_signal, mod_labels, eps=-10.0, norm="jsr_db", steps=20)
 ```
 
 <details>
-<summary>Standalone Co-Pilot CLI &amp; End-to-End Reporting Python API</summary>
+<summary>Standalone CLI Commands &amp; Single-File Ejection</summary>
 
 ```bash
-# Inspect project, display the 35-attack arsenal, or run interface preflight checks
+# Inspect project, list 35 attacks + 4 single-file defenses, and run hard verification gate
 wannado-adv inspect .
 wannado-adv arsenal
-wannado-adv preflight --interface ./adv_eval/interface.py
+wannado-adv scaffold --dir ./adv_eval --domain vision
+wannado-adv verify --interface ./adv_eval/interface.py --goal standard --samples 100 --min-robust-acc 0.60
 
-# Scaffold ONE non-intrusive evaluation boundary (adv_eval/interface.py + adv_eval/run_eval.py)
-wannado-adv scaffold --dir ./adv_eval --domain wireless
+# Eject ANY single-file attack or defense for custom new-paper prototyping
+wannado-adv eject apgd_dlr --dest ./adv_eval/attacks
+wannado-adv eject trades --dest ./adv_eval/defenses
 
-# Customize ONE attack from a new paper without touching your project or other attacks
-wannado-adv eject fgsm --dest ./adv_eval/attacks
-
-# Export verbatim verified citations (zero LLM/web hallucination)
-wannado-adv cite fgsm pgd apgd_dlr --format bibtex --include-audit-ref
-```
-
-```python
-from wannado.adv import scan_project, probe_model_context, recommend_suite, estimate_runtime, evaluate_suite
-
-scan = scan_project(".")
-probe = probe_model_context(model, x_eval, y_eval)
-suite = recommend_suite(domain=probe.inferred_domain, goal="standard", autograd_ok=probe.autograd_connected)
-print(estimate_runtime(model, x_eval, suite, num_samples=len(x_eval)).format_summary())
-
-report = evaluate_suite(
-    model, x_eval, y_eval,
-    eps=-10.0 if probe.is_complex else 8/255,
-    norm=probe.recommended_norm,
-    attacks=suite.attacks,
-    attack_kwargs=suite.attack_kwargs,
-    clip_bounds=probe.recommended_clip_bounds,
-    model_name="MyModel",
-    dataset_name="TestSplit",
-)
-report.save("./adv_eval/outputs")  # evaluation_report.json, paper_summary.md, paper_table.tex, references.bib
+# Export verbatim verified citations (attacks + defenses, zero hallucination)
+wannado-adv cite fgsm pgd apgd_dlr trades mart randomized_smoothing --format bibtex --include-audit-ref
 ```
 
 </details>
 
 ## Benchmarks & End-to-End Validation
 
-End-to-end validation scripts live under [`benchmarks/`](https://github.com/JietaoZhao/wannado-adv/blob/main/benchmarks/README.md) (kept strictly decoupled from core `pyproject.toml` dependencies). All numbers below are measured on Apple Silicon (`mps` for vision, `cpu` for native `torch.complex64` baseband RF).
+End-to-end validation scripts live under [`benchmarks/`](https://github.com/JietaoZhao/wannado-adv/blob/main/benchmarks/README.md) (strictly decoupled from core `pyproject.toml` dependencies).
 
-### 1. Vision Parity (`RobustBench` / `torchattacks` / Official `AutoAttack`) & False-Robustness Audit
+### 1. Vectorized `FAB`, Autonomous Red-Team Fake-Defense Suite, Hardening & Certified L2 Smoothing
+
+- **Vectorized Batched `FAB` Speedup**: `3.14x–8.86x` CPU speedup (`B=8..64`, 3-layer ConvNet, 10 steps) via batched hyperplane projection + `batch_size` chunking.
+- **Breaking 4 Classic Fake Defenses (`auto_red_team()`)**: Exposes and defeats **Softmax 200x** (naive PGD `100%` -> auto-escalated `apgd_dlr` `15.6%`), **4-bit Quantizer** (naive PGD `100%` -> `bpda_eot` + `square_attack` `6.2%`), **Stochastic Noise** (naive PGD `48.4%` -> `eot_pgd` `21.9%`), and **Hard-Label Oracle** (naive PGD `100%` -> `hopskipjump` `6.2%`).
+- **Closed-Loop Hardening & Carlini 2.0 Re-Audit**: Raises worst-case red-team robust accuracy (`Linf=0.20`) from `34.4%` (Baseline, `AURC=0.47`) to `84.4%` (`PGD-AT`, `AURC=0.61`), `90.6%` (`TRADES`, `AURC=0.67`), and `85.4%` (`MART`, `AURC=0.61`) — all passing Carlini 2.0 (`passed=True`, zero gradient masking).
+- **Zero-SciPy Randomized Smoothing Certification**: Pure-Python Clopper–Pearson L2 curves (`alpha=0.001`) achieve median certified radii up to `R = 0.56` (`sigma=0.30`).
+
+![v1.2.0 Vectorized FAB, Autonomous Red-Team, Hardening and Certified L2 Smoothing](https://raw.githubusercontent.com/JietaoZhao/wannado-adv/main/benchmarks/assets/redteam_and_hardening.png)
+
+### 2. Vision Parity (`RobustBench` / `torchattacks` / Official `AutoAttack`) & False-Robustness Audit
 
 - **MPS Compatibility**: `26/26` representative Wave 1+2 attacks pass natively on Apple Silicon `mps`.
 - **CIFAR-10 Parity (`eps=8/255`, `N=200`)**: Matches `torchattacks` & official `fra31/auto-attack` on `Standard` (Clean `94.5%`, `PGD-10`/`MI`/`NI`/`DI`/`APGD` -> `0.0%`, `AutoAttack` `0.0%` in `19.43s` vs `22.10s`) and matches/tightens `Wong2020Fast` (Clean `86.0%`, `FGSM 53.0%`, `PGD-10 46.0%`, `NI-FGSM 47.5% vs 51.0%`, `Square-500q 63.0% vs 65.5%`, `AutoAttack 42.0% vs 43.0%`).
@@ -139,7 +129,7 @@ End-to-end validation scripts live under [`benchmarks/`](https://github.com/Jiet
 
 ![CIFAR-10 RobustBench Alignment and Carlini Audit](https://raw.githubusercontent.com/JietaoZhao/wannado-adv/main/benchmarks/assets/cv_alignment_and_audit.png)
 
-### 2. Native `torch.complex64` Wireless Baseband (`norm="jsr_db"`)
+### 3. Native `torch.complex64` Wireless Baseband (`norm="jsr_db"`)
 
 - Tested across 6 modulation schemes (`BPSK`, `QPSK`, `8PSK`, `16QAM`, `64QAM`, `PAM4`, Clean Acc `83.33%`) using unified power-ratio constraints `JSR in [-24, 0] dB` with zero real/imag manual splitting.
 - On a non-differentiable 4-bit IQ ADC receiver (`83.33%` clean), naive `PGD` reports `82.3%–83.3%` apparent robustness due to zero quantizer gradients; `audit_robustness()` immediately raises red flags, and `bpda_eot` reduces real accuracy monotonically to `42.7% (-24 dB) -> 18.8% (-18 dB) -> 1.0% (-14 dB) -> 0.0% (-10 dB)`.
@@ -149,13 +139,15 @@ End-to-end validation scripts live under [`benchmarks/`](https://github.com/Jiet
 ## Running Tests & Rebuilding the Catalog
 
 ```bash
-python3 -m unittest discover -s tests -v
+pytest -v
+ruff check src tests benchmarks
+mypy src/wannado/adv
 python3 -m wannado.adv.catalog --build
 ```
 
 ## Feedback & Suggestions
 
-Found a bug, want a new attack paper implemented, or have ideas to improve the AI IDE Co-Pilot experience? Send feedback or suggestions without leaving GitHub:
+Found a bug, want a new attack or defense paper implemented, or have ideas to improve the autonomous agent experience? Send feedback without leaving GitHub:
 
 - **Open Feedback Portal**: [https://jietaozhao.github.io/wannado-adv/](https://jietaozhao.github.io/wannado-adv/)
 - Or scan the QR code below from your phone:

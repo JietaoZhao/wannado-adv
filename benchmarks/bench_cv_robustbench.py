@@ -20,11 +20,11 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import torch
-import torch.nn as nn
 import torchattacks
 from autoattack import AutoAttack as OfficialAutoAttack
 from robustbench.data import load_cifar10
 from robustbench.utils import load_model
+from torch import nn
 
 from wannado.adv import (
     adv_patch,
@@ -33,7 +33,6 @@ from wannado.adv import (
     apgd_dlr,
     apgd_l1,
     audit_robustness,
-    autoattack as wd_autoattack,
     boundary,
     bpda_eot,
     compute_perturbation_norm,
@@ -57,6 +56,9 @@ from wannado.adv import (
     tpgd,
     vmi_fgsm,
     zoo,
+)
+from wannado.adv import (
+    autoattack as wd_autoattack,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -184,43 +186,43 @@ def run_benchmark(num_samples: int = 200, device_arg: str = "auto", seed: int = 
         pair_specs = [
             (
                 "FGSM",
-                lambda: fgsm(model, x_test, y_test, eps=eps, clip_bounds=(0.0, 1.0)),
-                lambda: torchattacks.FGSM(model, eps=eps)(x_test, y_test),
+                lambda m=model: fgsm(m, x_test, y_test, eps=eps, clip_bounds=(0.0, 1.0)),
+                lambda m=model: torchattacks.FGSM(m, eps=eps)(x_test, y_test),
             ),
             (
                 "PGD-10",
-                lambda: pgd(model, x_test, y_test, eps=eps, step_size=step_size, steps=10, clip_bounds=(0.0, 1.0), seed=seed),
-                lambda: torchattacks.PGD(model, eps=eps, alpha=step_size, steps=10, random_start=True)(x_test, y_test),
+                lambda m=model: pgd(m, x_test, y_test, eps=eps, step_size=step_size, steps=10, clip_bounds=(0.0, 1.0), seed=seed),
+                lambda m=model: torchattacks.PGD(m, eps=eps, alpha=step_size, steps=10, random_start=True)(x_test, y_test),
             ),
             (
                 "MI-FGSM-10",
-                lambda: mifgsm(model, x_test, y_test, eps=eps, step_size=step_size, steps=10, decay=1.0, clip_bounds=(0.0, 1.0)),
-                lambda: torchattacks.MIFGSM(model, eps=eps, alpha=step_size, steps=10, decay=1.0)(x_test, y_test),
+                lambda m=model: mifgsm(m, x_test, y_test, eps=eps, step_size=step_size, steps=10, decay=1.0, clip_bounds=(0.0, 1.0)),
+                lambda m=model: torchattacks.MIFGSM(m, eps=eps, alpha=step_size, steps=10, decay=1.0)(x_test, y_test),
             ),
             (
                 "NI-FGSM-10",
-                lambda: ni_fgsm(model, x_test, y_test, eps=eps, step_size=step_size, steps=10, decay=1.0, clip_bounds=(0.0, 1.0)),
-                lambda: torchattacks.NIFGSM(model, eps=eps, alpha=step_size, steps=10, decay=1.0)(x_test, y_test),
+                lambda m=model: ni_fgsm(m, x_test, y_test, eps=eps, step_size=step_size, steps=10, decay=1.0, clip_bounds=(0.0, 1.0)),
+                lambda m=model: torchattacks.NIFGSM(m, eps=eps, alpha=step_size, steps=10, decay=1.0)(x_test, y_test),
             ),
             (
                 "DI-FGSM-10",
-                lambda: di_fgsm(model, x_test, y_test, eps=eps, step_size=step_size, steps=10, decay=0.0, diversity_prob=0.5, clip_bounds=(0.0, 1.0), seed=seed),
-                lambda: torchattacks.DIFGSM(model, eps=eps, alpha=step_size, steps=10, decay=0.0, diversity_prob=0.5)(x_test, y_test),
+                lambda m=model: di_fgsm(m, x_test, y_test, eps=eps, step_size=step_size, steps=10, decay=0.0, diversity_prob=0.5, clip_bounds=(0.0, 1.0), seed=seed),
+                lambda m=model: torchattacks.DIFGSM(m, eps=eps, alpha=step_size, steps=10, decay=0.0, diversity_prob=0.5)(x_test, y_test),
             ),
             (
                 "APGD-CE-20",
-                lambda: apgd_ce(model, x_test, y_test, eps=eps, steps=20, restarts=1, clip_bounds=(0.0, 1.0), seed=seed),
-                lambda: torchattacks.APGD(model, norm="Linf", eps=eps, steps=20, n_restarts=1, loss="ce", seed=seed)(x_test, y_test),
+                lambda m=model: apgd_ce(m, x_test, y_test, eps=eps, steps=20, restarts=1, clip_bounds=(0.0, 1.0), seed=seed),
+                lambda m=model: torchattacks.APGD(m, norm="Linf", eps=eps, steps=20, n_restarts=1, loss="ce", seed=seed)(x_test, y_test),
             ),
             (
                 "APGD-DLR-20",
-                lambda: apgd_dlr(model, x_test, y_test, eps=eps, steps=20, restarts=1, clip_bounds=(0.0, 1.0), seed=seed),
-                lambda: torchattacks.APGD(model, norm="Linf", eps=eps, steps=20, n_restarts=1, loss="dlr", seed=seed)(x_test, y_test),
+                lambda m=model: apgd_dlr(m, x_test, y_test, eps=eps, steps=20, restarts=1, clip_bounds=(0.0, 1.0), seed=seed),
+                lambda m=model: torchattacks.APGD(m, norm="Linf", eps=eps, steps=20, n_restarts=1, loss="dlr", seed=seed)(x_test, y_test),
             ),
             (
                 "Square-500q",
-                lambda: square_attack(model, x_test, y_test, eps=eps, max_queries=500, clip_bounds=(0.0, 1.0), seed=seed),
-                lambda: torchattacks.Square(model, norm="Linf", eps=eps, n_queries=500, n_restarts=1, seed=seed)(x_test, y_test),
+                lambda m=model: square_attack(m, x_test, y_test, eps=eps, max_queries=500, clip_bounds=(0.0, 1.0), seed=seed),
+                lambda m=model: torchattacks.Square(m, norm="Linf", eps=eps, n_queries=500, n_restarts=1, seed=seed)(x_test, y_test),
             ),
         ]
 

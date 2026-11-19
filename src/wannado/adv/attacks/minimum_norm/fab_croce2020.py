@@ -97,75 +97,92 @@ META = AttackMeta(
 )
 
 
-def _norm_p(x: torch.Tensor, norm: str) -> float:
+def _norm_p_batch(x: torch.Tensor, norm: str) -> torch.Tensor:
+    """Compute per-sample L_inf or L2 distortion norm as real tensor of shape ``(M,)``."""
+    m = x.shape[0]
+    flat = x.reshape(m, -1)
     if norm == "linf":
-        return float(x.abs().max().item())
-    return float(safe_l2_norm(x.reshape(-1), dim=None).item())
+        return flat.abs().amax(dim=1)
+    return safe_l2_norm(flat, dim=1)
 
 
-def _project_hyperplane_box(
+def _project_hyperplane_box_batch(
     x_ref: torch.Tensor,
     w: torch.Tensor,
-    h_val: float,
+    h_val: torch.Tensor,
     norm: str,
     clip_bounds: tuple[Any, Any] | None,
 ) -> torch.Tensor:
-    """Compute minimal-norm displacement ``d`` from ``x_ref`` to ``h_val + <w, d> = 0``."""
-    if clip_bounds is None:
-        if norm == "linf":
-            w_l1 = float(w.abs().sum().item())
-            if w_l1 <= 1e-12:
-                return torch.zeros_like(x_ref)
-            sign_factor = -1.0 if h_val >= 0 else 1.0
-            return (abs(h_val) / w_l1) * sign_factor * step_direction(w, norm="linf")
-        w_l2_sq = float((w.abs().pow(2)).sum().item())
-        if w_l2_sq <= 1e-12:
-            return torch.zeros_like(x_ref)
-        return (-h_val / w_l2_sq) * w
+    """Vectorized minimal-norm displacement ``d`` from ``x_ref`` to ``h_val + <w, d> = 0`` for batch ``(M, ...)``."""
+    m = x_ref.shape[0]
+    real_dtype = x_ref.real.dtype if x_ref.is_complex() else x_ref.dtype
+    w_flat = w.reshape(m, -1)
+    h_col = h_val.to(device=x_ref.device, dtype=real_dtype).view(m, 1)
+    zero_out = torch.zeros_like(w_flat)
 
-    # Real tensor with box constraints [low, high]: solve via exact 1D monotonic bisection.
+    if clip_bounds is None:
+        sign_factor = torch.where(h_col >= 0.0, -torch.ones_like(h_col), torch.ones_like(h_col))
+        if norm == "linf":
+            w_l1 = w_flat.abs().sum(dim=1, keepdim=True).to(real_dtype)
+            valid = (w_l1 > 1e-12) & (h_col.abs() > 1e-12)
+            dir_linf = step_direction(w, norm="linf").reshape(m, -1)
+            scale = (h_col.abs() / w_l1.clamp(min=1e-12)) * sign_factor
+            d_flat = torch.where(valid, scale.to(w_flat.dtype) * dir_linf, zero_out)
+            return d_flat.view_as(x_ref)
+        w_l2_sq = w_flat.abs().pow(2).sum(dim=1, keepdim=True).to(real_dtype)
+        valid = (w_l2_sq > 1e-12) & (h_col.abs() > 1e-12)
+        scale = -h_col / w_l2_sq.clamp(min=1e-12)
+        d_flat = torch.where(valid, scale.to(w_flat.dtype) * w_flat, zero_out)
+        return d_flat.view_as(x_ref)
+
+    # Real tensor with box constraints [low, high]: exact vectorized 1D monotonic bisection.
     low, high = coerce_clip_bounds(clip_bounds, x_ref)
-    d_low = low - x_ref
-    d_high = high - x_ref
-    sign_h = -1.0 if h_val >= 0 else 1.0
-    # Target linear functional value: <w, d> = -h_val => sign_h * <w, d> = |h_val|.
-    target = abs(h_val)
-    if target <= 1e-12:
-        return torch.zeros_like(x_ref)
+    d_low = (low - x_ref).reshape(m, -1)
+    d_high = (high - x_ref).reshape(m, -1)
+    sign_h = torch.where(h_col >= 0.0, -torch.ones_like(h_col), torch.ones_like(h_col))
+    target = h_col.abs()
+    active = target > 1e-12
 
     if norm == "linf":
-        direction = sign_h * torch.sign(w)
-        r_hi = max(float(d_low.abs().max().item()), float(d_high.abs().max().item()), 1e-6)
-        candidate_fn = lambda r: torch.clamp(r * direction, min=d_low, max=d_high)
+        direction = sign_h * torch.sign(w_flat)
+        r_hi = torch.maximum(d_low.abs(), d_high.abs()).amax(dim=1, keepdim=True).clamp(min=1e-6)
+        valid = active & (w_flat.abs().sum(dim=1, keepdim=True) > 1e-12)
     else:
-        w_l2_sq = float(w.pow(2).sum().item())
-        if w_l2_sq <= 1e-12:
-            return torch.zeros_like(x_ref)
-        direction = sign_h * w
-        r_max_box = float(torch.maximum(d_low.abs(), d_high.abs()).max().item())
-        w_min_nz = float(w[w.abs() > 1e-12].abs().min().item()) if (w.abs() > 1e-12).any() else 1.0
-        r_hi = max(r_max_box / max(w_min_nz, 1e-6), target / w_l2_sq)
-        candidate_fn = lambda r: torch.clamp(r * direction, min=d_low, max=d_high)
+        w_l2_sq = w_flat.pow(2).sum(dim=1, keepdim=True)
+        valid = active & (w_l2_sq > 1e-12)
+        direction = sign_h * w_flat
+        r_max_box = torch.maximum(d_low.abs(), d_high.abs()).amax(dim=1, keepdim=True)
+        abs_w = w_flat.abs()
+        w_pos = torch.where(abs_w > 1e-12, abs_w, torch.full_like(abs_w, float("inf")))
+        w_min_nz = w_pos.amin(dim=1, keepdim=True)
+        w_min_nz = torch.where(torch.isfinite(w_min_nz), w_min_nz, torch.ones_like(w_min_nz))
+        r_hi = torch.maximum(r_max_box / w_min_nz.clamp(min=1e-6), target / w_l2_sq.clamp(min=1e-12))
 
-    max_achievable = float((sign_h * (w * candidate_fn(r_hi)).sum()).item())
-    if max_achievable <= target:
-        return candidate_fn(r_hi)
+    cand_hi = torch.minimum(torch.maximum(r_hi * direction, d_low), d_high)
+    max_achievable = (sign_h * (w_flat * cand_hi).sum(dim=1, keepdim=True))
+    needs_bisect = valid & (max_achievable > target)
 
-    r_lo = 0.0
-    for _ in range(30):
-        r_mid = 0.5 * (r_lo + r_hi)
-        val = float((sign_h * (w * candidate_fn(r_mid)).sum()).item())
-        if val < target:
-            r_lo = r_mid
-        else:
-            r_hi = r_mid
-    return candidate_fn(r_hi)
+    r_lo = torch.zeros_like(r_hi)
+    r_hi_work = r_hi.clone()
+    if needs_bisect.any():
+        for _ in range(30):
+            r_mid = 0.5 * (r_lo + r_hi_work)
+            cand_mid = torch.minimum(torch.maximum(r_mid * direction, d_low), d_high)
+            val = sign_h * (w_flat * cand_mid).sum(dim=1, keepdim=True)
+            too_small = val < target
+            r_lo = torch.where(needs_bisect & too_small, r_mid, r_lo)
+            r_hi_work = torch.where(needs_bisect & (~too_small), r_mid, r_hi_work)
+
+    cand_final = torch.minimum(torch.maximum(r_hi_work * direction, d_low), d_high)
+    chosen = torch.where(needs_bisect, cand_final, cand_hi)
+    d_flat = torch.where(valid, chosen, zero_out)
+    return d_flat.view_as(x_ref)
 
 
-def _fab_single_sample(
+def _fab_batched(
     model_or_fn: Callable[[torch.Tensor], torch.Tensor],
-    x_single: torch.Tensor,
-    y_orig: int,
+    x_orig: torch.Tensor,
+    y_orig: torch.Tensor,
     norm: str,
     steps: int,
     restarts: int,
@@ -174,129 +191,138 @@ def _fab_single_sample(
     eta: float,
     max_classes: int,
     targeted: bool,
-    target_label: int | None,
+    target_labels: torch.Tensor | None,
     clip_bounds: tuple[Any, Any] | None,
     generator: torch.Generator | None,
 ) -> tuple[torch.Tensor, int]:
-    """Run Algorithm 1 of Croce & Hein (ICML 2020) on a single sample ``(1, ...)``."""
-    best_adv = x_single.clone()
-    best_dist = float("inf")
+    """Run vectorized Algorithm 1 of Croce & Hein (ICML 2020) across active batch ``(M, ...)``."""
+    m = x_orig.shape[0]
+    real_dtype = x_orig.real.dtype if x_orig.is_complex() else x_orig.dtype
+    view_shape = (m,) + (1,) * (x_orig.ndim - 1)
+    ar = torch.arange(m, device=x_orig.device)
+
+    best_adv = x_orig.clone()
+    best_dist = torch.full((m,), float("inf"), device=x_orig.device, dtype=real_dtype)
     total_steps = 0
 
     with torch.no_grad():
-        logits_clean = normalize_classification_logits(model_or_fn(x_single))
+        logits_clean = normalize_classification_logits(model_or_fn(x_orig))
         num_classes = logits_clean.shape[1]
-        sorted_classes = logits_clean.argsort(dim=1, descending=True)[0]
         if targeted:
-            if target_label is None:
-                raise ValueError("target_label must be provided when targeted=True.")
-            candidate_classes: list[int] = [int(target_label)]
+            if target_labels is None:
+                raise ValueError("target_labels must be provided when targeted=True.")
+            cand_classes = target_labels.reshape(m, 1).to(torch.long)
         else:
-            candidate_classes = [
-                int(c.item()) for c in sorted_classes if int(c.item()) != y_orig
-            ][: max(1, min(num_classes - 1, max_classes))]
+            k_cand = max(1, min(num_classes - 1, max_classes))
+            masked_clean = logits_clean.clone()
+            masked_clean[ar, y_orig] = float("-inf")
+            cand_classes = masked_clean.topk(k_cand, dim=1).indices.to(torch.long)
+
+    num_cands = cand_classes.shape[1]
+    proj_norm = "linf" if norm == "linf" else "l2"
 
     for r_idx in range(restarts):
         if r_idx == 0:
-            x_curr = x_single.clone()
+            x_curr = x_orig.clone()
         else:
-            # Restart inside a ball around x_clean scaled to 0.5 * best_dist (or small probe).
-            probe_radius = 0.5 * best_dist if best_dist < float("inf") else 0.1
-            eps_probe = torch.full(
-                (1,) + (1,) * (x_single.ndim - 1),
-                probe_radius,
-                device=x_single.device,
-                dtype=x_single.real.dtype if x_single.is_complex() else x_single.dtype,
-            )
-            proj_norm = "linf" if norm == "linf" else "l2"
-            x_curr = x_single + random_init_perturbation(
-                x_single, eps_probe, norm=proj_norm, clip_bounds=clip_bounds, generator=generator
+            probe_radius = torch.where(
+                torch.isfinite(best_dist),
+                0.5 * best_dist,
+                torch.full_like(best_dist, 0.1),
+            ).view(view_shape)
+            x_curr = x_orig + random_init_perturbation(
+                x_orig, probe_radius, norm=proj_norm, clip_bounds=clip_bounds, generator=generator
             )
 
         for _ in range(steps):
             total_steps += 1
             x_in = x_curr.detach().requires_grad_(True)
             logits = normalize_classification_logits(model_or_fn(x_in))
-            pred = int(predict_labels(logits)[0].item())
+            preds = predict_labels(logits)
 
-            is_fooled = (pred == target_label) if targeted else (pred != y_orig)
-            if is_fooled:
-                cur_dist = _norm_p(x_curr - x_single, norm=norm)
-                if cur_dist < best_dist:
-                    best_dist = cur_dist
-                    best_adv = x_curr.detach().clone()
-
-            # Compute closest linearized boundary hyperplane among candidate classes.
             if targeted:
-                other_classes = [c for c in range(logits.shape[1]) if c != target_label]
-                ref_cls = (
-                    pred
-                    if pred != target_label
-                    else max(other_classes, key=lambda c: float(logits[0, c].item()))
-                )
+                assert target_labels is not None
+                is_fooled = preds == target_labels
+            else:
+                is_fooled = preds != y_orig
+
+            cur_dist = _norm_p_batch(x_curr - x_orig, norm=norm).to(real_dtype)
+            improved = is_fooled & (cur_dist < best_dist)
+            if improved.any():
+                best_dist = torch.where(improved, cur_dist, best_dist)
+                best_adv = torch.where(improved.view(view_shape), x_curr.detach(), best_adv)
+
+            if targeted:
+                assert target_labels is not None
+                masked_logits = logits.detach().clone()
+                masked_logits[ar, target_labels] = float("-inf")
+                runner_up = masked_logits.argmax(dim=1)
+                ref_cls = torch.where(preds != target_labels, preds, runner_up)
             else:
                 ref_cls = y_orig
 
-            (grad_orig,) = torch.autograd.grad(logits[0, ref_cls], x_in, retain_graph=True)
+            (grad_orig,) = torch.autograd.grad(logits[ar, ref_cls].sum(), x_in, retain_graph=True)
             grad_orig = grad_orig.detach()
 
-            min_hp_dist = float("inf")
-            best_w = None
-            best_b = 0.0
+            min_hp_dist = torch.full((m,), float("inf"), device=x_orig.device, dtype=real_dtype)
+            best_w = torch.zeros_like(x_orig)
+            best_b = torch.zeros((m,), device=x_orig.device, dtype=real_dtype)
 
-            for idx, k in enumerate(candidate_classes):
-                retain = idx < len(candidate_classes) - 1
-                (grad_k,) = torch.autograd.grad(logits[0, k], x_in, retain_graph=retain)
+            for k_idx in range(num_cands):
+                cls_k = cand_classes[:, k_idx]
+                retain = k_idx < num_cands - 1
+                (grad_k,) = torch.autograd.grad(logits[ar, cls_k].sum(), x_in, retain_graph=retain)
                 w_k = grad_k.detach() - grad_orig
-                b_k = float((logits[0, k] - logits[0, ref_cls]).detach().item())
+                b_k = (logits[ar, cls_k] - logits[ar, ref_cls]).detach().to(real_dtype)
 
                 if norm == "linf":
-                    dual_norm = float(w_k.abs().sum().item())
+                    dual_norm = w_k.abs().reshape(m, -1).sum(dim=1).to(real_dtype)
                 else:
-                    dual_norm = float(safe_l2_norm(w_k.reshape(-1), dim=None).item())
-                if dual_norm <= 1e-12:
-                    continue
+                    dual_norm = safe_l2_norm(w_k.reshape(m, -1), dim=1).to(real_dtype)
 
-                hp_dist = abs(b_k) / dual_norm
-                if hp_dist < min_hp_dist:
-                    min_hp_dist = hp_dist
-                    best_w = w_k
-                    best_b = b_k
+                valid_k = dual_norm > 1e-12
+                hp_dist = torch.where(valid_k, b_k.abs() / dual_norm.clamp(min=1e-12), torch.full_like(b_k, float("inf")))
+                better = valid_k & (hp_dist < min_hp_dist)
+                if better.any():
+                    min_hp_dist = torch.where(better, hp_dist, min_hp_dist)
+                    best_w = torch.where(better.view(view_shape), w_k, best_w)
+                    best_b = torch.where(better, b_k, best_b)
 
-            if best_w is None:
+            valid_step = torch.isfinite(min_hp_dist)
+            if not valid_step.any():
                 break
 
-            # Project both x_curr and x_clean onto the linearized boundary hyperplane.
-            d_curr = _project_hyperplane_box(x_curr, best_w, best_b, norm=norm, clip_bounds=clip_bounds)
-            diff_clean = x_single - x_curr
-            inner_clean = float(
-                (best_w.conj() * diff_clean).real.sum().item()
-                if best_w.is_complex()
-                else (best_w * diff_clean).sum().item()
-            )
-            h_clean = best_b + inner_clean
-            d_orig = _project_hyperplane_box(x_single, best_w, h_clean, norm=norm, clip_bounds=clip_bounds)
-
-            n1 = _norm_p(d_curr, norm=norm)
-            n2 = _norm_p(d_orig, norm=norm)
-            alpha = min(n1 / (n1 + n2 + 1e-12), alpha_max)
-
-            x_forward = (1.0 - alpha) * (x_curr + eta * d_curr) + alpha * (x_single + eta * d_orig)
-            if is_fooled:
-                # Backward contraction step only once across the boundary to tighten distortion.
-                x_curr = (1.0 - beta) * x_single + beta * x_forward
+            d_curr = _project_hyperplane_box_batch(x_curr, best_w, best_b, norm=norm, clip_bounds=clip_bounds)
+            diff_clean = x_orig - x_curr
+            if best_w.is_complex():
+                inner_clean = (best_w.conj() * diff_clean).real.reshape(m, -1).sum(dim=1).to(real_dtype)
             else:
-                x_curr = x_forward
-            x_curr = clamp_to_bounds(x_curr, clip_bounds)
+                inner_clean = (best_w * diff_clean).reshape(m, -1).sum(dim=1).to(real_dtype)
+            h_clean = best_b + inner_clean
+            d_orig = _project_hyperplane_box_batch(x_orig, best_w, h_clean, norm=norm, clip_bounds=clip_bounds)
+
+            n1 = _norm_p_batch(d_curr, norm=norm).to(real_dtype)
+            n2 = _norm_p_batch(d_orig, norm=norm).to(real_dtype)
+            alpha = torch.clamp(n1 / (n1 + n2 + 1e-12), max=alpha_max).view(view_shape)
+
+            x_forward = (1.0 - alpha) * (x_curr + eta * d_curr) + alpha * (x_orig + eta * d_orig)
+            x_contract = (1.0 - beta) * x_orig + beta * x_forward
+            x_next = torch.where(is_fooled.view(view_shape), x_contract, x_forward)
+            x_next = clamp_to_bounds(x_next, clip_bounds)
+            x_curr = torch.where(valid_step.view(view_shape), x_next, x_curr)
 
         with torch.no_grad():
-            pred_end = int(predict_labels(model_or_fn(x_curr))[0].item())
-            is_fooled = (pred_end == target_label) if targeted else (pred_end != y_orig)
-            if is_fooled:
-                cur_dist = _norm_p(x_curr - x_single, norm=norm)
-                if cur_dist < best_dist:
-                    best_dist = cur_dist
-                    best_adv = x_curr.detach().clone()
+            preds_end = predict_labels(model_or_fn(x_curr))
+            if targeted:
+                assert target_labels is not None
+                is_fooled_end = preds_end == target_labels
+            else:
+                is_fooled_end = preds_end != y_orig
+            cur_dist_end = _norm_p_batch(x_curr - x_orig, norm=norm).to(real_dtype)
+            improved_end = is_fooled_end & (cur_dist_end < best_dist)
+            if improved_end.any():
+                best_dist = torch.where(improved_end, cur_dist_end, best_dist)
+                best_adv = torch.where(improved_end.view(view_shape), x_curr.detach(), best_adv)
 
     return best_adv, total_steps
 
@@ -316,8 +342,9 @@ def fab(
     targeted: bool = False,
     clip_bounds: tuple[float, float] | None = None,
     seed: int | None = None,
+    batch_size: int | None = None,
 ) -> AttackResult:
-    """Run Fast Adaptive Boundary (FAB) attack for minimal L2 or Linf distortion.
+    """Run vectorized Fast Adaptive Boundary (FAB) attack for minimal L2 or Linf distortion.
 
     Args:
         model_or_fn: Differentiable ``nn.Module`` or callable mapping ``x -> (B, C)`` logits.
@@ -334,6 +361,7 @@ def fab(
         targeted: If ``True``, searches minimal perturbation reaching target label ``y``.
         clip_bounds: Optional valid range ``(min, max)`` for real-valued inputs.
         seed: Optional random seed for restarts ``> 1``.
+        batch_size: Optional mini-batch chunk size to cap peak GPU/MPS memory on large evaluation sets.
 
     Returns:
         ``AttackResult`` containing minimal boundary adversarial examples and distortion stats.
@@ -347,7 +375,7 @@ def fab(
 
     t0 = time.perf_counter()
     x_clean = x.detach()
-    batch_size = x_clean.shape[0]
+    n_total = x_clean.shape[0]
     x_adv = x_clean.clone()
     total_steps = 0
 
@@ -356,27 +384,38 @@ def fab(
         generator = torch.Generator(device=x_clean.device)
         generator.manual_seed(seed)
 
+    chunk = n_total if (batch_size is None or batch_size <= 0) else int(batch_size)
     with eval_mode(model_or_fn):
-        with torch.no_grad():
-            clean_preds = predict_labels(model_or_fn(x_clean))
+        for start in range(0, n_total, chunk):
+            end = min(start + chunk, n_total)
+            xb = x_clean[start:end]
+            yb = y[start:end].to(device=x_clean.device, dtype=torch.long) if y is not None else None
 
-        for idx in range(batch_size):
-            pred_i = int(clean_preds[idx].item())
+            with torch.no_grad():
+                clean_preds = predict_labels(model_or_fn(xb))
+
             if targeted:
-                target_i = int(y[idx].item())  # type: ignore[index]
-                if pred_i == target_i:
-                    continue
-                y_orig_i = pred_i
+                assert yb is not None
+                active_mask = clean_preds != yb
+                y_orig_b = clean_preds
+                target_b: torch.Tensor | None = yb
             else:
-                if y is not None and pred_i != int(y[idx].item()):
-                    continue
-                y_orig_i = int(y[idx].item()) if y is not None else pred_i
-                target_i = None
+                if yb is not None:
+                    active_mask = clean_preds == yb
+                    y_orig_b = yb
+                else:
+                    active_mask = torch.ones((xb.shape[0],), dtype=torch.bool, device=x_clean.device)
+                    y_orig_b = clean_preds
+                target_b = None
 
-            adv_i, s_i = _fab_single_sample(
+            if not active_mask.any():
+                continue
+
+            act_idx = torch.nonzero(active_mask, as_tuple=False).squeeze(1)
+            adv_act, s_chunk = _fab_batched(
                 model_or_fn=model_or_fn,
-                x_single=x_clean[idx : idx + 1],
-                y_orig=y_orig_i,
+                x_orig=xb[act_idx],
+                y_orig=y_orig_b[act_idx],
                 norm=norm,
                 steps=steps,
                 restarts=restarts,
@@ -385,17 +424,17 @@ def fab(
                 eta=eta,
                 max_classes=max_classes,
                 targeted=targeted,
-                target_label=target_i,
+                target_labels=target_b[act_idx] if target_b is not None else None,
                 clip_bounds=clip_bounds,
                 generator=generator,
             )
-            x_adv[idx] = adv_i[0]
-            total_steps += s_i
+            x_adv[start + act_idx] = adv_act
+            total_steps = max(total_steps, s_chunk)
 
     delta = x_adv - x_clean
     if eps is not None:
         within_budget = within_eps_budget(delta, x_clean, eps=eps, norm=norm).view(
-            (batch_size,) + (1,) * (x_clean.ndim - 1)
+            (n_total,) + (1,) * (x_clean.ndim - 1)
         )
         x_adv = torch.where(within_budget, x_adv, x_clean)
         delta = x_adv - x_clean
@@ -416,5 +455,6 @@ def fab(
             "beta": beta,
             "eta": eta,
             "restarts": restarts,
+            "batched": True,
         },
     )

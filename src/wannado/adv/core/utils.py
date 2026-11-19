@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
@@ -11,18 +11,138 @@ import torch
 from torch import nn
 
 
+class DefendedModelWrapper(nn.Module):
+    """Composable ``nn.Module`` wrapping ``model_or_fn(defense_fn(x))`` while preserving ``eval()`` isolation."""
+
+    def __init__(
+        self,
+        model_or_fn: Callable[[torch.Tensor], torch.Tensor],
+        defense_fn: Callable[[torch.Tensor], torch.Tensor],
+    ) -> None:
+        super().__init__()
+        self._base_model = model_or_fn
+        self._defense_fn = defense_fn
+        if isinstance(model_or_fn, nn.Module):
+            self.base_module: nn.Module | None = model_or_fn
+            self.training = model_or_fn.training
+        else:
+            self.base_module = None
+            self.training = False
+        if isinstance(defense_fn, nn.Module):
+            self.defense_module: nn.Module | None = defense_fn
+        else:
+            self.defense_module = None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self._base_model(self._defense_fn(x))
+
+
+def iter_eval_batches(
+    x_or_loader: torch.Tensor | Iterable[tuple[torch.Tensor, torch.Tensor]],
+    y: torch.Tensor | None = None,
+    *,
+    batch_size: int | None = None,
+    max_samples: int | None = None,
+    device: torch.device | str | None = None,
+) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+    """Yield ``(x_batch, y_batch)`` chunks from either ``(x, y)`` tensors or a PyTorch ``DataLoader``/iterable."""
+    seen = 0
+    cap = None if (max_samples is None or max_samples <= 0) else int(max_samples)
+    dev = torch.device(device) if device is not None else None
+
+    if isinstance(x_or_loader, torch.Tensor):
+        if y is None:
+            raise ValueError("Target tensor `y` must be provided when `x` is a torch.Tensor.")
+        x_t = x_or_loader.detach()
+        y_t = y.detach()
+        n = x_t.shape[0] if cap is None else min(x_t.shape[0], cap)
+        chunk = n if (batch_size is None or batch_size <= 0) else int(batch_size)
+        for start in range(0, n, max(chunk, 1)):
+            end = min(start + chunk, n)
+            xb = x_t[start:end]
+            yb = y_t[start:end]
+            if dev is not None:
+                xb = xb.to(dev)
+                yb = yb.to(dev)
+            yield xb, yb
+        return
+
+    for item in x_or_loader:
+        if not isinstance(item, (tuple, list)) or len(item) < 2:
+            raise ValueError("DataLoader/iterable items must unpack as (x_batch, y_batch).")
+        xb_raw, yb_raw = item[0], item[1]
+        xb = xb_raw.detach() if isinstance(xb_raw, torch.Tensor) else torch.as_tensor(xb_raw)
+        yb = yb_raw.detach() if isinstance(yb_raw, torch.Tensor) else torch.as_tensor(yb_raw)
+        if cap is not None:
+            rem = cap - seen
+            if rem <= 0:
+                break
+            if xb.shape[0] > rem:
+                xb = xb[:rem]
+                yb = yb[:rem]
+        if batch_size is not None and batch_size > 0 and xb.shape[0] > int(batch_size):
+            sub = int(batch_size)
+            for s in range(0, xb.shape[0], sub):
+                e = min(s + sub, xb.shape[0])
+                xs = xb[s:e].to(dev) if dev is not None else xb[s:e]
+                ys = yb[s:e].to(dev) if dev is not None else yb[s:e]
+                seen += xs.shape[0]
+                yield xs, ys
+        else:
+            if dev is not None:
+                xb = xb.to(dev)
+                yb = yb.to(dev)
+            seen += xb.shape[0]
+            yield xb, yb
+        if cap is not None and seen >= cap:
+            break
+
+
+def materialize_eval_tensors(
+    x_or_loader: torch.Tensor | Iterable[tuple[torch.Tensor, torch.Tensor]],
+    y: torch.Tensor | None = None,
+    *,
+    max_samples: int | None = None,
+    device: torch.device | str | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Collect a bounded pair of ``(x, y)`` tensors from tensors or a ``DataLoader``/iterable."""
+    if isinstance(x_or_loader, torch.Tensor):
+        if y is None:
+            raise ValueError("Target tensor `y` must be provided when `x` is a torch.Tensor.")
+        x_t = x_or_loader.detach()
+        y_t = y.detach()
+        if max_samples is not None and max_samples > 0:
+            x_t = x_t[: int(max_samples)]
+            y_t = y_t[: int(max_samples)]
+        if device is not None:
+            dev = torch.device(device)
+            x_t = x_t.to(dev)
+            y_t = y_t.to(dev)
+        return x_t, y_t
+
+    xs: list[torch.Tensor] = []
+    ys: list[torch.Tensor] = []
+    for xb, yb in iter_eval_batches(x_or_loader, max_samples=max_samples, device=device):
+        xs.append(xb)
+        ys.append(yb)
+    if not xs:
+        raise ValueError("Evaluation DataLoader/iterable yielded zero samples.")
+    return torch.cat(xs, dim=0), torch.cat(ys, dim=0)
+
+
 @contextmanager
 def eval_mode(model_or_fn: Callable[[torch.Tensor], torch.Tensor]) -> Iterator[None]:
-    """Temporarily set an nn.Module to eval() and restore its original mode on exit."""
+    """Temporarily set an nn.Module to eval() and losslessly restore every submodule's exact training flag."""
     if not isinstance(model_or_fn, nn.Module):
         yield
         return
-    was_training = model_or_fn.training
+    saved_states = [(mod, mod.training) for mod in model_or_fn.modules()]
     model_or_fn.eval()
     try:
         yield
     finally:
-        model_or_fn.train(was_training)
+        for mod, was_training in saved_states:
+            mod.training = was_training
 
 
 def make_generator(seed: int | None, device: torch.device | str) -> torch.Generator | None:

@@ -11,7 +11,7 @@ from typing import Any
 
 from wannado.adv.attacks import ATTACK_EXPORTS, lazy_resolve
 
-__version__ = "1.0.6"
+__version__ = "1.2.0"
 
 _SUBMODULES = frozenset(
     {
@@ -21,6 +21,7 @@ _SUBMODULES = frozenset(
         "catalog",
         "copilot",
         "core",
+        "defenses",
         "reporter",
         "workspace",
     }
@@ -28,11 +29,39 @@ _SUBMODULES = frozenset(
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     **ATTACK_EXPORTS,
-    # AI-native preflight & Carlini robustness auditing
+    # Single-file modular adversarial defenses & certified L2 smoothing
+    "DefenseMeta": ("wannado.adv.defenses.types", "DefenseMeta"),
+    "DefenseTrainResult": ("wannado.adv.defenses.types", "DefenseTrainResult"),
+    "SmoothingCertificationResult": ("wannado.adv.defenses.types", "SmoothingCertificationResult"),
+    "certify_randomized_smoothing": (
+        "wannado.adv.defenses.randomized_smoothing_cohen2019",
+        "certify_randomized_smoothing",
+    ),
+    "clopper_pearson_lower": (
+        "wannado.adv.defenses.randomized_smoothing_cohen2019",
+        "clopper_pearson_lower",
+    ),
+    "gaussian_augmented_train": (
+        "wannado.adv.defenses.randomized_smoothing_cohen2019",
+        "gaussian_augmented_train",
+    ),
+    "list_defenses": ("wannado.adv.defenses", "list_defenses"),
+    "mart_train": ("wannado.adv.defenses.mart_wang2020", "mart_train"),
+    "norm_ppf": ("wannado.adv.defenses.randomized_smoothing_cohen2019", "norm_ppf"),
+    "pgd_adversarial_train": ("wannado.adv.defenses.pgd_at_madry2018", "pgd_adversarial_train"),
+    "smooth_predict": ("wannado.adv.defenses.randomized_smoothing_cohen2019", "smooth_predict"),
+    "trades_train": ("wannado.adv.defenses.trades_zhang2019", "trades_train"),
+    # AI-native preflight, Carlini 2.0 auditing, autonomous red-teaming & verify gate
+    "AdvVerifyReport": ("wannado.adv.audit.verify_gate", "AdvVerifyReport"),
     "AuditReport": ("wannado.adv.audit.carlini_auditor", "AuditReport"),
     "PreflightReport": ("wannado.adv.audit.preflight", "PreflightReport"),
+    "RedTeamReport": ("wannado.adv.audit.red_team", "RedTeamReport"),
     "audit_robustness": ("wannado.adv.audit.carlini_auditor", "audit_robustness"),
+    "auto_red_team": ("wannado.adv.audit.red_team", "auto_red_team"),
+    "compute_aurc_and_eps50": ("wannado.adv.audit.red_team", "compute_aurc_and_eps50"),
     "preflight": ("wannado.adv.audit.preflight", "preflight"),
+    "verify_robustness_gate": ("wannado.adv.audit.verify_gate", "verify_robustness_gate"),
+    "wilson_ci": ("wannado.adv.audit.red_team", "wilson_ci"),
     # AI Co-Pilot project inspection, SOTA planning, and ETA estimation
     "ModelContextProbe": ("wannado.adv.copilot", "ModelContextProbe"),
     "ProjectScan": ("wannado.adv.copilot", "ProjectScan"),
@@ -45,9 +74,10 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "probe_model_context": ("wannado.adv.copilot", "probe_model_context"),
     "recommend_suite": ("wannado.adv.copilot", "recommend_suite"),
     "scan_project": ("wannado.adv.copilot", "scan_project"),
-    # Non-intrusive interface scaffolding & single-file attack ejection
+    # Non-intrusive interface scaffolding & single-file attack/defense ejection
     "VictimInterface": ("wannado.adv.workspace", "VictimInterface"),
     "eject_attack": ("wannado.adv.workspace", "eject_attack"),
+    "eject_defense": ("wannado.adv.workspace", "eject_defense"),
     "scaffold_interface": ("wannado.adv.workspace", "scaffold_interface"),
     # Publication-ready reporting & zero-hallucination citation export
     "AttackRunRecord": ("wannado.adv.reporter", "AttackRunRecord"),
@@ -63,10 +93,13 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     # Core primitives
     "AttackMeta": ("wannado.adv.core.types", "AttackMeta"),
     "AttackResult": ("wannado.adv.core.types", "AttackResult"),
+    "DefendedModelWrapper": ("wannado.adv.core.utils", "DefendedModelWrapper"),
     "SklearnModelAdapter": ("wannado.adv.core.utils", "SklearnModelAdapter"),
     "clamp_to_bounds": ("wannado.adv.core.projections", "clamp_to_bounds"),
     "coerce_clip_bounds": ("wannado.adv.core.projections", "coerce_clip_bounds"),
     "compute_perturbation_norm": ("wannado.adv.core.projections", "compute_perturbation_norm"),
+    "iter_eval_batches": ("wannado.adv.core.utils", "iter_eval_batches"),
+    "materialize_eval_tensors": ("wannado.adv.core.utils", "materialize_eval_tensors"),
     "normalize_classification_logits": ("wannado.adv.core.losses", "normalize_classification_logits"),
     "predict_labels": ("wannado.adv.core.losses", "predict_labels"),
     "project_discrete_features": ("wannado.adv.core.projections", "project_discrete_features"),
@@ -78,17 +111,23 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
 }
 
 __all__ = [
+    "AdvVerifyReport",
     "AttackMeta",
     "AttackResult",
     "AttackRunRecord",
     "AuditReport",
+    "DefendedModelWrapper",
+    "DefenseMeta",
+    "DefenseTrainResult",
     "EvaluationReport",
     "ModelContextProbe",
     "PreflightReport",
     "ProjectScan",
     "RecommendedSuite",
+    "RedTeamReport",
     "RuntimeEstimate",
     "SklearnModelAdapter",
+    "SmoothingCertificationResult",
     "VictimInterface",
     "__version__",
     "adam_pgd",
@@ -100,14 +139,18 @@ __all__ = [
     "apgd_l1",
     "apgd_t",
     "audit_robustness",
+    "auto_red_team",
     "autoattack",
     "bim",
     "boundary",
     "bpda_eot",
     "build_interactive_brief",
     "build_registry_json",
+    "certify_randomized_smoothing",
     "clamp_to_bounds",
+    "clopper_pearson_lower",
     "coerce_clip_bounds",
+    "compute_aurc_and_eps50",
     "compute_perturbation_norm",
     "cw_l2",
     "deepfool",
@@ -115,6 +158,7 @@ __all__ = [
     "difgsm",
     "ead",
     "eject_attack",
+    "eject_defense",
     "eot_pgd",
     "estimate_runtime",
     "evaluate_suite",
@@ -124,18 +168,25 @@ __all__ = [
     "fab_t",
     "fgsm",
     "gap",
+    "gaussian_augmented_train",
     "get_sota_lineage",
     "hopskipjump",
     "install_agent_kit",
+    "iter_eval_batches",
     "jsma",
+    "list_defenses",
     "load_catalog",
+    "mart_train",
+    "materialize_eval_tensors",
     "mi_fgsm",
     "mifgsm",
     "nes",
     "ni_fgsm",
     "nifgsm",
+    "norm_ppf",
     "normalize_classification_logits",
     "pgd",
+    "pgd_adversarial_train",
     "predict_labels",
     "preflight",
     "probe_model_context",
@@ -151,6 +202,7 @@ __all__ = [
     "simba",
     "sini_fgsm",
     "sinifgsm",
+    "smooth_predict",
     "sparsefool",
     "spsa",
     "square_attack",
@@ -158,10 +210,13 @@ __all__ = [
     "ti_fgsm",
     "tifgsm",
     "tpgd",
+    "trades_train",
     "uap",
     "unwrap_model_outputs",
+    "verify_robustness_gate",
     "vmi_fgsm",
     "vmifgsm",
+    "wilson_ci",
     "wrap_sklearn_model",
     "zoo",
 ]

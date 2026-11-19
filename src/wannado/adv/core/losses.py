@@ -91,7 +91,10 @@ def _dlr_loss(logits: torch.Tensor, y: torch.Tensor, targeted: bool = False) -> 
     z_other = torch.where(idx_sorted[:, 0] == flat_y, z_sorted[:, 1], z_sorted[:, 0])
 
     if targeted:
-        denom = (z_sorted[:, 0] - 0.5 * (z_sorted[:, 1] + z_sorted[:, 2])).clamp(min=1e-12)
+        if num_classes >= 4:
+            denom = (z_sorted[:, 0] - 0.5 * (z_sorted[:, 2] + z_sorted[:, 3])).clamp(min=1e-12)
+        else:
+            denom = (z_sorted[:, 0] - 0.5 * (z_sorted[:, 1] + z_sorted[:, 2])).clamp(min=1e-12)
     else:
         denom = (z_sorted[:, 0] - z_sorted[:, 2]).clamp(min=1e-12)
     dlr = (z_other - z_y) / denom

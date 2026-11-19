@@ -2,6 +2,33 @@
 
 All notable changes to `wannado-adv` will be documented in this file.
 
+## [1.2.0] - 2026-11-19
+
+### Added
+- **Autonomous Closed-Loop Red-Teaming (`auto_red_team` / `RedTeamReport`)**: One-click red-team engine that diagnoses victim failure modes via Carlini 2.0, adaptively escalates matched attacks (`apgd_dlr` for Softmax saturation, `bpda_eot` + `square_attack` for non-differentiable `defense_fn`, `eot_pgd` for stochastic defenses, `hopskipjump` for hard-label-only oracles, `apgd_l1` for `L1` geometry), computes true per-sample worst-case ensemble survival with exact **Wilson 95% confidence intervals**, sweeps **AURC** & **`eps_50`** robustness decay curves, and exports JSON/Markdown/LaTeX/BibTeX/CSV/PNG dossiers.
+- **Hard Agent/CI Verification Gate (`wannado-adv verify` / `verify_robustness_gate`)**: Single-command CLI & Python gate returning hard exit codes (`0` PASS / `1` FAIL) on Carlini 2.0 false-robustness red flags, budget invariants, clean/robust accuracy thresholds, or continuous output L2 drift thresholds.
+- **Carlini 2.0 False-Robustness Auditor (`audit_robustness`)**: Upgraded with test-time stochasticity detection (`stochastic_defense_requires_eot` + EoT cross-check), explicit `defense_fn` BPDA cross-check (`obfuscated_defense_broken_by_bpda`), native `norm="l1"` support via `apgd_l1`, hard-label-only oracle detection, and continuous regression/DRL auditing (`clean_mse`, `adv_mse`, `output_l2_drift`, `cosine_similarity`).
+- **Single-File Modular Defenses & Zero-SciPy Certified L2 Robustness (`wannado.adv.defenses`)**:
+  - `pgd_adversarial_train` (Madry et al., ICLR 2018) — supports vision, tabular, and `torch.complex64` wireless `jsr_db`.
+  - `trades_train` (Zhang et al., ICML 2019) — clean-vs-robust KL boundary trade-off.
+  - `mart_train` (Wang et al., ICLR 2020) — boosted-CE misclassification-aware hardening.
+  - `gaussian_augmented_train`, `smooth_predict`, `certify_randomized_smoothing` (Cohen et al., ICML 2019) — provable L2 radii $R = \sigma \Phi^{-1}(\underline{p_A})$ with pure-Python Acklam `norm_ppf` + regularized incomplete beta Clopper–Pearson bounds (**zero SciPy dependency**).
+  - Wired into verbatim zero-hallucination `export_citations()` / `wannado-adv cite`, single-file `eject_defense()` / `wannado-adv eject`, and `wannado-adv arsenal`.
+- **Dataset-Scale Mini-Batch Evaluation (`DataLoader` / `batch_size`)**: Added `DefendedModelWrapper`, `iter_eval_batches`, and `materialize_eval_tensors` across `evaluate_suite`, `auto_red_team`, `autoattack`, `fab`, and `VictimInterface` (`defense_fn` / `surrogate_fn` + `--batch-size`).
+- **End-to-End v1.2.0 Benchmark (`benchmarks/bench_redteam_and_hardening.py`)**: Verifies batched `FAB` speedups (`3.1x–8.9x` CPU), `auto_red_team()` defeating 4 fake defenses, `PGD-AT`/`TRADES`/`MART` hardening passing Carlini 2.0 re-audits, and pure-Python Randomized Smoothing L2 curves (`benchmarks/assets/redteam_and_hardening.png`).
+
+### Changed
+- **Vectorized Batched `FAB` (`attacks/minimum_norm/fab_croce2020.py`)**: Replaced sample-by-sample inner loop with fully vectorized batched hyperplane projection (`_fab_batched` + `batch_size` chunking), delivering `3.1x–8.9x` CPU speedup on multi-layer ConvNets.
+- **Streamlined Autonomous-First `agent_kit` (`SKILL.md`, `AGENTS.md`, `CLAUDE.md`, Cursor rules)**: Replaced mandatory pre-run multi-question ceremonies with direct `wannado-adv inspect . -> scaffold -> wannado-adv verify` autonomous red-teaming and closed-loop hardening + Carlini 2.0 re-auditing.
+- **True Conditional Attack Success Rate (`evaluate_suite`)**: `attack_success_rate` is now strictly conditional on clean-correct predictions (`clean_correct & adv_wrong / clean_correct`), matching academic conventions.
+- Promoted package classifier to `Development Status :: 5 - Production/Stable`.
+
+### Fixed
+- **Exact Targeted DLR Denominator (`core/losses.py`)**: Fixed Croce & Hein (2020) targeted DLR denominator for `C >= 4` (`z_(1) - 0.5 * (z_(3) + z_(4))`) and passed `targeted=targeted` consistently in `pgd` and `fgsm`.
+- **HuggingFace `.logits` AutoAttack Stage 2b Crash**: Reused unwrapped `clean_logits` in `autoattack_croce2020.py` Stage 2b instead of indexing raw `ModelOutput` objects.
+- **Continuous Float Target Preflight Crash**: `preflight()` now auto-selects `"mse"` / L2 drift verification on continuous float targets instead of failing in `F.cross_entropy`.
+- **Lossless `eval_mode()` Submodule Restoration (`core/utils.py`)**: Snapshots and restores every submodule's exact `.training` flag and synchronizes `DefendedModelWrapper.training`, preventing `BatchNorm1d` state mutation across chained attacks.
+
 ## [1.0.6] - 2026-11-17
 
 ### Changed

@@ -1,15 +1,13 @@
 <!-- wannado-adv:start -->
-# CLAUDE.md — wannado-adv AI Co-Pilot Instructions
+# CLAUDE.md — wannado-adv Autonomous Red-Team & Hardening Instructions
 
-This project uses `wannado-adv` for modular, AI-assisted adversarial robustness evaluation. Read `.claude/skills/wannado-adv/SKILL.md` (or `.agents/skills/wannado-adv/SKILL.md` / `AGENTS.md`) and run `wannado-adv inspect .` before proposing or editing adversarial evaluation code.
+This project uses `wannado-adv` for autonomous, modular adversarial robustness red-teaming, hardening, and certified L2 smoothing. Read `.claude/skills/wannado-adv/SKILL.md` (or `.agents/skills/wannado-adv/SKILL.md` / `AGENTS.md`) and run `wannado-adv inspect .` before editing adversarial evaluation code.
 
-- **Scope & Sibling Handoff (`wannado-drl`)**: Activate `wannado-adv` ONLY for adversarial attacks, robustness evaluation, or adversarial training (`./adv_eval/`). If `wannado-drl` is also present and the user wants to formulate an MDP or train an initial RL policy, defer to `./drl_lab/` first; when auditing robustness of an already-trained RL policy, leave `./drl_lab/` untouched and embed any frozen `obs_rms_state` (`mean`, `var`) via differentiable PyTorch ops inside `VictimInterface`.
+- **Scope & Sibling Handoff (`wannado-drl`)**: Activate `wannado-adv` ONLY for adversarial attacks, robustness auditing, adversarial training, or certified smoothing (`./adv_eval/`). If `wannado-drl` is also present and the user wants to formulate an MDP or train an initial RL policy, defer to `./drl_lab/` first; when auditing robustness of an already-trained RL policy, leave `./drl_lab/` untouched and embed any frozen `obs_rms_state` (`mean`, `var`) via differentiable PyTorch ops inside `VictimInterface`.
 
-## Core Collaboration Rules
-- **Re-scan the project** (`scan_project` / `wannado-adv inspect .`) whenever repo files or models change before advising parameters.
-- **Isolate adversarial code** inside `./adv_eval/` (`interface.py` + `run_eval.py` via `wannado-adv scaffold`) instead of modifying training/model modules directly.
-- **Customize algorithms in single files**: use `wannado-adv eject <attack_id> --dest ./adv_eval/attacks` and edit ONLY that file when implementing new-paper upgrades.
-- **Zero-Jargon interactive guidance + ETA**: Match the user's conversation language. Use `explain_parameters()` and `estimate_runtime()`, give a plain everyday analogy + higher-vs-lower trade-off BEFORE asking any parameter question, and ensure every option label explains what it does in practice (never bare jargon like `8/255` alone).
-- **No fabricated citations**: always source `.bib` / IEEE / APA strings directly via `export_citations()` or `wannado-adv cite`.
-- **Report verdict + paper variables after every run**: always call `evaluate_suite(..., run_audit=True)` and open with a plain-language conclusion followed by Carlini audit results, LaTeX tables, and verified `.bib` files.
+## Core Autonomous Workflow Rules
+- **Inspect & Execute Directly**: Run `wannado-adv inspect .` + `probe_model_context()`, isolate the victim in `./adv_eval/interface.py` (`wannado-adv scaffold`), and run `wannado-adv verify` (or `auto_red_team()`) directly without unnecessary pre-run interrogation.
+- **Non-Intrusive & Single-File Ejection**: Never scatter adversarial loops across model/training files. Use `wannado-adv eject <attack_or_defense_id>` when modifying any attack or defense algorithm.
+- **Closed-Loop Hardening & Carlini 2.0 Re-Audit**: Use `pgd_adversarial_train`, `trades_train`, `mart_train`, or `certify_randomized_smoothing` when hardening/certifying, then re-run `wannado-adv verify` / `audit_robustness()` to verify genuine robustness (`passed=True`).
+- **Zero-Jargon Verdict & Citations**: Match the user's language, open with a plain-language conclusion (and explain knobs plainly with `estimate_runtime()` ETA whenever user input is actually needed), and export verbatim citations strictly via `wannado-adv cite` / `export_citations()`.
 <!-- wannado-adv:end -->

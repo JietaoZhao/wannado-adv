@@ -8,22 +8,24 @@ import json
 import math
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as F
+from torch import nn
 
 from wannado.adv.attacks import ATTACK_EXPORTS
 from wannado.adv.audit.carlini_auditor import AuditReport, audit_robustness
 from wannado.adv.audit.preflight import PreflightReport, preflight
 from wannado.adv.catalog.build_catalog import load_catalog
 from wannado.adv.core.losses import predict_labels, unwrap_model_outputs
-from wannado.adv.core.projections import compute_perturbation_norm
+from wannado.adv.core.projections import compute_perturbation_norm, safe_l2_norm
 from wannado.adv.core.types import AttackMeta, AttackResult
-from wannado.adv.core.utils import eval_mode
+from wannado.adv.core.utils import DefendedModelWrapper, eval_mode, iter_eval_batches
 
 
 def _serialize_bounds(bounds: Any) -> Any:
@@ -84,6 +86,12 @@ def export_citations(
         raise ValueError(f"Unsupported citation format '{fmt}'. Expected 'bibtex', 'ieee', or 'apa'.")
 
     by_id = {c["id"]: c for c in load_catalog()}
+    from wannado.adv.defenses import DEFENSE_EXPORTS, DEFENSE_METAS
+
+    for d_id, d_meta in DEFENSE_METAS.items():
+        if d_id not in by_id:
+            by_id[d_id] = d_meta.to_dict()
+
     seen: set[str] = set()
     entries: list[str] = []
 
@@ -95,12 +103,18 @@ def export_citations(
             meta_obj = getattr(mod, "META", None)
             if isinstance(meta_obj, AttackMeta):
                 aid = meta_obj.id
+        elif aid not in by_id and raw_aid in DEFENSE_EXPORTS:
+            mod_name, _ = DEFENSE_EXPORTS[raw_aid]
+            mod = importlib.import_module(mod_name)
+            meta_obj = getattr(mod, "META", None)
+            if meta_obj is not None and hasattr(meta_obj, "id"):
+                aid = str(meta_obj.id)
         if aid in seen:
             continue
         card = by_id.get(aid)
         if card is None:
             raise KeyError(
-                f"Unknown attack '{raw_aid}' in export_citations(). Refusing to fabricate citation."
+                f"Unknown attack/defense '{raw_aid}' in export_citations(). Refusing to fabricate citation."
             )
         seen.add(aid)
         entries.append(card["citation"][fmt])
@@ -137,6 +151,9 @@ class AttackRunRecord:
     citation: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
+    adv_mse: float | None = None
+    output_l2_drift: float | None = None
+    cosine_similarity: float | None = None
 
 
 @dataclass
@@ -160,6 +177,7 @@ class EvaluationReport:
     preflight: PreflightReport | None
     audit: AuditReport | None
     records: list[AttackRunRecord] = field(default_factory=list)
+    clean_mse: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize entire experiment & paper setup into JSON-compatible dictionary."""
@@ -180,6 +198,7 @@ class EvaluationReport:
                 "clip_bounds": _serialize_bounds(self.clip_bounds),
                 "num_samples": self.num_samples,
                 "clean_acc": self.clean_acc,
+                "clean_mse": self.clean_mse,
                 "notes": self.notes,
             },
             "preflight": self.preflight.to_dict() if self.preflight is not None else None,
@@ -220,6 +239,12 @@ class EvaluationReport:
             )
 
         eps_desc = f"{self.eps:+.1f}\\,\\text{{dB JSR}}" if self.norm == "jsr_db" else f"{self.eps:.4g}"
+        is_cls_report = self.clean_acc is not None
+        header_cols = (
+            "    Attack & Threat Model & Steps / Queries & Robust Acc (\\%) $\\uparrow$ & Cond. ASR (\\%) $\\downarrow$ & Max Meas. $\\delta$ \\\\"
+            if is_cls_report
+            else "    Attack & Threat Model & Steps / Queries & Adv MSE $\\downarrow$ & Out L2 Drift $\\downarrow$ & Max Meas. $\\delta$ \\\\"
+        )
         lines = [
             "% Requires \\usepackage{booktabs}",
             "\\begin{table}[t]",
@@ -228,11 +253,14 @@ class EvaluationReport:
             "  \\label{tab:wannado_robustness}",
             "  \\begin{tabular}{llcccc}",
             "    \\toprule",
-            "    Attack & Threat Model & Steps / Queries & Robust Acc (\\%) $\\uparrow$ & ASR (\\%) $\\downarrow$ & Max Meas. $\\delta$ \\\\",
+            header_cols,
             "    \\midrule",
         ]
-        if self.clean_acc is not None:
+        if is_cls_report and self.clean_acc is not None:
             lines.append(f"    Clean Baseline & -- & -- & {self.clean_acc * 100:.2f} & 0.00 & 0.0000 \\\\")
+            lines.append("    \\midrule")
+        elif self.clean_mse is not None:
+            lines.append(f"    Clean Baseline & -- & -- & {self.clean_mse:.4g} & 0.0000 & 0.0000 \\\\")
             lines.append("    \\midrule")
 
         for r in self.records:
@@ -244,10 +272,14 @@ class EvaluationReport:
                 budget_unit = f"{q_per_img:.1f} q/img ({r.queries_used} tot)"
             else:
                 budget_unit = f"{r.steps_run} {unit_word}"
-            acc_s = f"{r.robust_acc * 100:.2f}" if r.robust_acc is not None else "N/A"
-            asr_s = f"{r.attack_success_rate * 100:.2f}" if r.attack_success_rate is not None else "N/A"
             max_s = f"{r.max_perturbation:.4g}" if math.isfinite(r.max_perturbation) else "$-\\infty$"
-            lines.append(f"    {name_tex} & {tm_tex} & {budget_unit} & {acc_s} & {asr_s} & {max_s} \\\\")
+            if is_cls_report:
+                c1 = f"{r.robust_acc * 100:.2f}" if r.robust_acc is not None else "N/A"
+                c2 = f"{r.attack_success_rate * 100:.2f}" if r.attack_success_rate is not None else "N/A"
+            else:
+                c1 = f"{r.adv_mse:.4g}" if r.adv_mse is not None else "N/A"
+                c2 = f"{r.output_l2_drift:.4g}" if r.output_l2_drift is not None else "N/A"
+            lines.append(f"    {name_tex} & {tm_tex} & {budget_unit} & {c1} & {c2} & {max_s} \\\\")
 
         lines.extend(
             [
@@ -266,6 +298,7 @@ class EvaluationReport:
             if self.norm == "jsr_db"
             else f"{self.eps:.6g}"
         )
+        is_cls_report = self.clean_acc is not None
         lines = [
             f"# Academic Evaluation Report — {self.model_name} on {self.dataset_name}",
             "",
@@ -277,21 +310,36 @@ class EvaluationReport:
         ]
         if self.clean_acc is not None:
             lines.append(f"- **Clean Baseline Accuracy**: `{self.clean_acc * 100.0:.2f}%`")
+        elif self.clean_mse is not None:
+            lines.append(f"- **Clean Baseline MSE**: `{self.clean_mse:.6g}`")
         if self.notes:
             lines.append(f"- **Notes**: {self.notes}")
 
         lines.extend(["", "## 2. Quantitative Robustness & Budget Verification"])
-        lines.append("| Attack | Tier | Threat Model | Robust Acc | ASR | Max Measured $\\delta$ | Budget OK | Time |")
-        lines.append("| --- | :---: | --- | ---: | ---: | ---: | :---: | ---: |")
+        if is_cls_report:
+            lines.append("| Attack | Tier | Threat Model | Robust Acc | Cond. ASR | Max Measured $\\delta$ | Budget OK | Time |")
+            lines.append("| --- | :---: | --- | ---: | ---: | ---: | :---: | ---: |")
+        else:
+            lines.append("| Attack | Tier | Threat Model | Adv MSE | Output L2 Drift | Cosine Sim | Max Measured $\\delta$ | Budget OK | Time |")
+            lines.append("| --- | :---: | --- | ---: | ---: | ---: | ---: | :---: | ---: |")
         for r in self.records:
-            acc_s = f"{r.robust_acc * 100:.2f}%" if r.robust_acc is not None else "N/A"
-            asr_s = f"{r.attack_success_rate * 100:.2f}%" if r.attack_success_rate is not None else "N/A"
             max_s = f"{r.max_perturbation:.4g}" if math.isfinite(r.max_perturbation) else "-inf"
             ok_s = "PASS" if (r.budget_respected and r.error is None) else "FAIL"
-            lines.append(
-                f"| {r.display_name} (`{r.attack_id}`) | {r.tier} | {r.threat_model} | "
-                f"{acc_s} | {asr_s} | {max_s} | {ok_s} | {r.elapsed_ms:.1f} ms |"
-            )
+            if is_cls_report:
+                acc_s = f"{r.robust_acc * 100:.2f}%" if r.robust_acc is not None else "N/A"
+                asr_s = f"{r.attack_success_rate * 100:.2f}%" if r.attack_success_rate is not None else "N/A"
+                lines.append(
+                    f"| {r.display_name} (`{r.attack_id}`) | {r.tier} | {r.threat_model} | "
+                    f"{acc_s} | {asr_s} | {max_s} | {ok_s} | {r.elapsed_ms:.1f} ms |"
+                )
+            else:
+                mse_s = f"{r.adv_mse:.4g}" if r.adv_mse is not None else "N/A"
+                drift_s = f"{r.output_l2_drift:.4g}" if r.output_l2_drift is not None else "N/A"
+                cos_s = f"{r.cosine_similarity:.4f}" if r.cosine_similarity is not None else "N/A"
+                lines.append(
+                    f"| {r.display_name} (`{r.attack_id}`) | {r.tier} | {r.threat_model} | "
+                    f"{mse_s} | {drift_s} | {cos_s} | {max_s} | {ok_s} | {r.elapsed_ms:.1f} ms |"
+                )
 
         lines.extend(["", "## 3. Exact Per-Attack Hyperparameters Disclosed for Publication"])
         for r in self.records:
@@ -424,16 +472,52 @@ def _build_call_kwargs(
     return call_kwargs, disclosed
 
 
+_DATASET_LEVEL_ATTACKS = frozenset({"uap", "adv_patch", "gap", "advgan"})
+
+
+def _infer_target_device(
+    model_or_fn: Callable[[torch.Tensor], torch.Tensor],
+    first_x: torch.Tensor,
+    from_loader: bool,
+) -> torch.device:
+    if not from_loader:
+        return first_x.device
+    if isinstance(model_or_fn, nn.Module):
+        for p in model_or_fn.parameters():
+            return p.device
+    return first_x.device
+
+
+def _per_sample_mse(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    diff = (pred - target).reshape(pred.shape[0], -1)
+    if diff.is_complex():
+        return (diff.real.pow(2) + diff.imag.pow(2)).mean(dim=1)
+    return diff.pow(2).mean(dim=1)
+
+
+def _per_sample_cosine(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    af = a.reshape(a.shape[0], -1)
+    bf = b.reshape(b.shape[0], -1)
+    if af.is_complex() or bf.is_complex():
+        af = torch.cat([af.real, af.imag], dim=1)
+        bf = torch.cat([bf.real, bf.imag], dim=1)
+    return F.cosine_similarity(af.float(), bf.float(), dim=1, eps=1e-8)
+
+
 def evaluate_suite(
     model_or_fn: Callable[[torch.Tensor], torch.Tensor],
-    x: torch.Tensor,
-    y: torch.Tensor,
+    x: torch.Tensor | Iterable[tuple[torch.Tensor, torch.Tensor]],
+    y: torch.Tensor | None = None,
     *,
     eps: float = 0.03,
     norm: str = "linf",
     attacks: Sequence[str | Callable[..., AttackResult]] = ("fgsm", "pgd", "apgd_dlr", "square_attack"),
     attack_kwargs: dict[str, dict[str, Any]] | None = None,
     clip_bounds: tuple[Any, Any] | None = None,
+    batch_size: int | None = None,
+    max_samples: int | None = None,
+    defense_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    surrogate_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
     run_preflight: bool = True,
     run_audit: bool = True,
     audit_samples: int = 64,
@@ -444,67 +528,130 @@ def evaluate_suite(
     notes: str = "",
     verbose: bool = True,
 ) -> EvaluationReport:
-    """Execute preflight, attack suite, budget verification, Carlini audit, and paper reporting."""
-    x_clean = x.detach()
-    y_clean = y.detach()
-    is_complex = bool(x_clean.is_complex())
-    resolved_domain = domain or ("wireless" if is_complex else ("vision" if x_clean.ndim == 4 else "tabular"))
+    """Execute preflight, mini-batch/DataLoader attack suite, budget verification, Carlini audit, and paper reporting."""
+    from_loader = not isinstance(x, torch.Tensor)
+    raw_batches = list(iter_eval_batches(x, y, batch_size=batch_size, max_samples=max_samples))
+    if not raw_batches:
+        raise ValueError("Evaluation input yielded zero samples.")
+
+    first_x, first_y = raw_batches[0]
+    eval_device = _infer_target_device(model_or_fn, first_x, from_loader=from_loader)
+    is_complex = bool(first_x.is_complex())
+    resolved_domain = domain or ("wireless" if is_complex else ("vision" if first_x.ndim == 4 else "tabular"))
     by_id = {c["id"]: c for c in load_catalog()}
     per_attack_overrides = dict(attack_kwargs or {})
 
+    deployed_victim: Callable[[torch.Tensor], torch.Tensor] = (
+        DefendedModelWrapper(model_or_fn, defense_fn) if defense_fn is not None else model_or_fn
+    )
+
+    total_n = sum(int(xb.shape[0]) for xb, _ in raw_batches)
+
+    # 1. Clean baseline pass (chunked to keep peak memory O(batch_size))
+    is_classification = False
+    clean_correct_total = 0
+    clean_preds_per_batch: list[torch.Tensor] = []
+    clean_outs_per_batch: list[torch.Tensor] = []
+    clean_mse_sum = 0.0
+    clean_mse_applicable = True
+
+    with eval_mode(deployed_victim), torch.no_grad():
+        for b_idx, (xb_raw, yb_raw) in enumerate(raw_batches):
+            xb = xb_raw.to(eval_device)
+            yb = yb_raw.to(eval_device)
+            clean_out = unwrap_model_outputs(deployed_victim(xb))
+            if b_idx == 0:
+                is_classification = bool(
+                    clean_out.ndim >= 1
+                    and yb.dtype
+                    in (
+                        torch.int64,
+                        torch.int32,
+                        torch.int16,
+                        torch.int8,
+                        torch.uint8,
+                        torch.long,
+                    )
+                )
+            if is_classification:
+                c_preds = predict_labels(clean_out)
+                y_cmp = (
+                    yb.squeeze(1)
+                    if c_preds.ndim == 1 and yb.ndim == 2 and yb.shape[1] == 1
+                    else yb
+                )
+                clean_correct_total += int((c_preds == y_cmp).sum().item())
+                clean_preds_per_batch.append(c_preds.detach().cpu())
+            else:
+                clean_outs_per_batch.append(clean_out.detach().cpu())
+                if clean_out.shape == yb.shape:
+                    clean_mse_sum += float(_per_sample_mse(clean_out, yb).sum().item())
+                else:
+                    clean_mse_applicable = False
+
+    clean_acc: float | None = (clean_correct_total / max(total_n, 1)) if is_classification else None
+    clean_mse: float | None = (
+        (clean_mse_sum / max(total_n, 1)) if (not is_classification and clean_mse_applicable) else None
+    )
+
+    # 2. Preflight on first slice (continuous-safe loss selection + defense_fn aware)
+    pf_loss = "ce" if is_classification else ("mse" if clean_mse_applicable else None)
+    k_pf = min(first_x.shape[0], 16)
     pf_report = (
         preflight(
             model_or_fn,
-            x_clean,
-            y_clean,
+            first_x[:k_pf].to(eval_device),
+            first_y[:k_pf].to(eval_device),
             eps=eps,
             norm=norm,
             clip_bounds=clip_bounds,
+            loss=pf_loss,
+            defense_fn=defense_fn,
         )
         if run_preflight
         else None
     )
 
-    is_classification = False
-    clean_acc: float | None = None
-    with eval_mode(model_or_fn), torch.no_grad():
-        clean_out = unwrap_model_outputs(model_or_fn(x_clean))
-        if clean_out.ndim >= 1 and y_clean.dtype in (
-            torch.int64,
-            torch.int32,
-            torch.int16,
-            torch.int8,
-            torch.uint8,
-            torch.long,
-        ):
-            is_classification = True
-            clean_preds = predict_labels(clean_out)
-            y_cmp = (
-                y_clean.squeeze(1)
-                if clean_preds.ndim == 1 and y_clean.ndim == 2 and y_clean.shape[1] == 1
-                else y_clean
-            )
-            clean_acc = float((clean_preds == y_cmp).float().mean().item())
-
     if verbose:
-        clean_msg = f"{clean_acc * 100:.2f}%" if clean_acc is not None else "non-classification"
+        if clean_acc is not None:
+            clean_msg = f"{clean_acc * 100:.2f}%"
+        elif clean_mse is not None:
+            clean_msg = f"MSE={clean_mse:.4g}"
+        else:
+            clean_msg = "non-classification"
+        chunk_note = f", batch_size={batch_size}" if batch_size is not None else ""
         print(
-            f"[wannado-adv] Clean baseline: {clean_msg} (N={x_clean.shape[0]}, device={x_clean.device})",
+            f"[wannado-adv] Clean baseline: {clean_msg} (N={total_n}{chunk_note}, device={eval_device})",
             flush=True,
         )
 
+    # 3. Carlini 2.0 false-robustness audit on bounded prefix slice (classification AND continuous!)
     audit_report: AuditReport | None = None
-    if run_audit and is_classification and x_clean.shape[0] >= 2:
-        k_audit = min(x_clean.shape[0], max(2, audit_samples))
+    if run_audit and total_n >= 2:
+        k_audit = min(total_n, max(2, audit_samples))
+        ax_list: list[torch.Tensor] = []
+        ay_list: list[torch.Tensor] = []
+        collected = 0
+        for xb_raw, yb_raw in raw_batches:
+            take = min(xb_raw.shape[0], k_audit - collected)
+            if take <= 0:
+                break
+            ax_list.append(xb_raw[:take])
+            ay_list.append(yb_raw[:take])
+            collected += take
+        x_audit = torch.cat(ax_list, dim=0).to(eval_device)
+        y_audit = torch.cat(ay_list, dim=0).to(eval_device)
         if verbose:
-            print(f"[wannado-adv] Running Carlini false-robustness audit (N={k_audit})...", flush=True)
+            print(f"[wannado-adv] Running Carlini 2.0 false-robustness audit (N={collected})...", flush=True)
         audit_report = audit_robustness(
             model_or_fn,
-            x_clean[:k_audit],
-            y_clean[:k_audit],
+            x_audit,
+            y_audit,
             eps=eps,
             norm=norm,
             clip_bounds=clip_bounds,
+            defense_fn=defense_fn,
+            surrogate_fn=surrogate_fn,
             seed=seed,
         )
         if verbose:
@@ -513,45 +660,154 @@ def evaluate_suite(
                 flush=True,
             )
 
+    # 4. Run each attack across chunks (or materialized dataset for universal/generative attacks)
     records: list[AttackRunRecord] = []
     total_attacks = len(attacks)
+    tol = 1e-2 if norm == "jsr_db" else max(1e-4, abs(eps) * 1e-3)
+
     for idx, entry in enumerate(attacks, start=1):
         aid, fn, card = _resolve_attack_entry(entry, by_id)
         overrides = dict(per_attack_overrides.get(aid, {}))
+        sig = inspect.signature(fn)
+        uses_bpda_defense = defense_fn is not None and "defense_fn" in sig.parameters
+        if uses_bpda_defense:
+            overrides.setdefault("defense_fn", defense_fn)
+            if surrogate_fn is not None and "surrogate_fn" in sig.parameters:
+                overrides.setdefault("surrogate_fn", surrogate_fn)
+        if not is_classification and "loss" in sig.parameters and "loss" not in overrides and clean_mse_applicable:
+            overrides["loss"] = "mse"
+
         call_kwargs, disclosed_hp = _build_call_kwargs(
             fn, eps=eps, norm=norm, clip_bounds=clip_bounds, seed=seed, overrides=overrides
         )
+        if batch_size is not None and "batch_size" in sig.parameters and "batch_size" not in call_kwargs:
+            call_kwargs["batch_size"] = int(batch_size)
+
+        attack_victim = model_or_fn if uses_bpda_defense else deployed_victim
+        is_targeted = bool(call_kwargs.get("targeted", False))
         if verbose:
             print(f"[wannado-adv] [{idx}/{total_attacks}] Running {aid}...", flush=True)
-        sig = inspect.signature(fn)
+
         t0 = time.perf_counter()
         try:
-            if "y" in sig.parameters:
-                res = fn(model_or_fn, x_clean, y_clean, **call_kwargs)
+            if aid in _DATASET_LEVEL_ATTACKS and len(raw_batches) > 1:
+                exec_batches = [
+                    (
+                        torch.cat([xb for xb, _ in raw_batches], dim=0),
+                        torch.cat([yb for _, yb in raw_batches], dim=0),
+                    )
+                ]
+                clean_preds_exec = [torch.cat(clean_preds_per_batch, dim=0)] if is_classification else []
+                clean_outs_exec = [torch.cat(clean_outs_per_batch, dim=0)] if not is_classification else []
             else:
-                res = fn(model_or_fn, x_clean, **call_kwargs)
+                exec_batches = raw_batches
+                clean_preds_exec = clean_preds_per_batch
+                clean_outs_exec = clean_outs_per_batch
 
-            elapsed_ms = res.elapsed_ms if getattr(res, "elapsed_ms", None) else (time.perf_counter() - t0) * 1000.0
-            norms = compute_perturbation_norm(res.perturbation, norm=norm, x_ref=x_clean)
-            mean_norm = float(norms.mean().item())
-            max_norm = float(norms.max().item())
-            tol = 1e-2 if norm == "jsr_db" else max(1e-4, abs(eps) * 1e-3)
+            norm_sum = 0.0
+            max_norm = float("-inf")
+            steps_max = 0
+            queries_total: int | None = None
+            elapsed_sum_ms = 0.0
+            adv_correct_total = 0
+            fooled_clean_correct_total = 0
+            targeted_hits_total = 0
+            adv_mse_sum = 0.0
+            l2_drift_sum = 0.0
+            cos_sum = 0.0
+            last_extra: dict[str, Any] = {}
+
+            for b_idx, (xb_raw, yb_raw) in enumerate(exec_batches):
+                xb = xb_raw.to(eval_device)
+                yb = yb_raw.to(eval_device)
+                chunk_kwargs = dict(call_kwargs)
+                if "seed" in chunk_kwargs and chunk_kwargs["seed"] is not None and b_idx > 0:
+                    chunk_kwargs["seed"] = int(chunk_kwargs["seed"]) + b_idx * 1009
+
+                t_chunk = time.perf_counter()
+                if "y" in sig.parameters:
+                    res = fn(attack_victim, xb, yb, **chunk_kwargs)
+                else:
+                    res = fn(attack_victim, xb, **chunk_kwargs)
+                chunk_ms = (
+                    float(res.elapsed_ms)
+                    if getattr(res, "elapsed_ms", None)
+                    else (time.perf_counter() - t_chunk) * 1000.0
+                )
+                elapsed_sum_ms += chunk_ms
+                steps_max = max(steps_max, int(res.steps_run))
+
+                norms = compute_perturbation_norm(res.perturbation, norm=norm, x_ref=xb)
+                norm_sum += float(norms.sum().item())
+                chunk_max = float(norms.max().item())
+                max_norm = max(max_norm, chunk_max)
+
+                if isinstance(res.extra, dict):
+                    q_val = res.extra.get("queries")
+                    if q_val is not None:
+                        queries_total = (queries_total or 0) + int(q_val)
+                    last_extra = dict(res.extra)
+
+                with eval_mode(deployed_victim), torch.no_grad():
+                    adv_out = unwrap_model_outputs(deployed_victim(res.x_adv))
+                    if is_classification:
+                        adv_preds = predict_labels(adv_out)
+                        y_cmp = (
+                            yb.squeeze(1)
+                            if adv_preds.ndim == 1 and yb.ndim == 2 and yb.shape[1] == 1
+                            else yb
+                        )
+                        adv_correct = adv_preds == y_cmp
+                        adv_correct_total += int(adv_correct.sum().item())
+                        if is_targeted:
+                            targeted_hits_total += int(adv_correct.sum().item())
+                        else:
+                            c_preds_b = clean_preds_exec[b_idx].to(eval_device)
+                            clean_ok_b = c_preds_b == y_cmp
+                            fooled_clean_correct_total += int((clean_ok_b & (~adv_correct)).sum().item())
+                    else:
+                        c_out_b = clean_outs_exec[b_idx].to(eval_device)
+                        diff_out = (adv_out - c_out_b).reshape(xb.shape[0], -1)
+                        l2_drift_sum += float(safe_l2_norm(diff_out, dim=1).sum().item())
+                        cos_sum += float(_per_sample_cosine(adv_out, c_out_b).sum().item())
+                        if clean_mse_applicable and adv_out.shape == yb.shape:
+                            adv_mse_sum += float(_per_sample_mse(adv_out, yb).sum().item())
+
+            mean_norm = norm_sum / max(total_n, 1)
             budget_ok = (max_norm <= eps + tol) if math.isfinite(max_norm) else True
 
             rob_acc: float | None = None
             asr: float | None = None
-            if is_classification:
-                with eval_mode(model_or_fn), torch.no_grad():
-                    adv_preds = predict_labels(model_or_fn(res.x_adv))
-                y_cmp = (
-                    y_clean.squeeze(1)
-                    if adv_preds.ndim == 1 and y_clean.ndim == 2 and y_clean.shape[1] == 1
-                    else y_clean
-                )
-                rob_acc = float((adv_preds == y_cmp).float().mean().item())
-                asr = 1.0 - rob_acc
+            adv_mse_val: float | None = None
+            l2_drift_val: float | None = None
+            cos_val: float | None = None
 
-            q_used = res.extra.get("queries") if isinstance(res.extra, dict) else None
+            if is_classification:
+                rob_acc = float(adv_correct_total / max(total_n, 1))
+                if is_targeted:
+                    asr = float(targeted_hits_total / max(total_n, 1))
+                else:
+                    asr = (
+                        float(fooled_clean_correct_total / clean_correct_total)
+                        if clean_correct_total > 0
+                        else 0.0
+                    )
+                last_extra["misclassification_rate"] = 1.0 - rob_acc
+                last_extra["clean_correct_count"] = clean_correct_total
+                last_extra["conditional_asr"] = asr
+            else:
+                l2_drift_val = float(l2_drift_sum / max(total_n, 1))
+                cos_val = float(cos_sum / max(total_n, 1))
+                if clean_mse_applicable:
+                    adv_mse_val = float(adv_mse_sum / max(total_n, 1))
+                last_extra["output_l2_drift"] = l2_drift_val
+                last_extra["cosine_similarity"] = cos_val
+                if adv_mse_val is not None:
+                    last_extra["adv_mse"] = adv_mse_val
+
+            if len(exec_batches) > 1:
+                last_extra["num_batches"] = len(exec_batches)
+
             records.append(
                 AttackRunRecord(
                     attack_id=aid,
@@ -563,19 +819,29 @@ def evaluate_suite(
                     mean_perturbation=mean_norm,
                     max_perturbation=max_norm,
                     budget_respected=budget_ok,
-                    steps_run=int(res.steps_run),
-                    queries_used=int(q_used) if q_used is not None else None,
-                    elapsed_ms=float(elapsed_ms),
+                    steps_run=steps_max,
+                    queries_used=queries_total,
+                    elapsed_ms=float(elapsed_sum_ms),
                     hyperparameters=disclosed_hp,
                     citation=dict(card.get("citation", {})),
-                    extra=dict(res.extra) if isinstance(res.extra, dict) else {},
+                    extra=last_extra,
+                    adv_mse=adv_mse_val,
+                    output_l2_drift=l2_drift_val,
+                    cosine_similarity=cos_val,
                 )
             )
             if verbose:
-                rob_str = f"{rob_acc * 100:.2f}%" if rob_acc is not None else "done"
+                if rob_acc is not None and asr is not None:
+                    metric_str = f"robust_acc={rob_acc * 100:.2f}%, cond_asr={asr * 100:.2f}%"
+                elif adv_mse_val is not None and l2_drift_val is not None:
+                    metric_str = f"adv_mse={adv_mse_val:.4g}, l2_drift={l2_drift_val:.4g}"
+                elif l2_drift_val is not None:
+                    metric_str = f"l2_drift={l2_drift_val:.4g}"
+                else:
+                    metric_str = "done"
                 print(
                     f"[wannado-adv] [{idx}/{total_attacks}] {aid} finished: "
-                    f"robust_acc={rob_str}, time={elapsed_ms:.1f} ms, budget={'PASS' if budget_ok else 'FAIL'}",
+                    f"{metric_str}, time={elapsed_sum_ms:.1f} ms, budget={'PASS' if budget_ok else 'FAIL'}",
                     flush=True,
                 )
         except Exception as exc:  # noqa: BLE001
@@ -609,10 +875,10 @@ def evaluate_suite(
         norm=norm,
         eps=float(eps),
         clip_bounds=clip_bounds,
-        num_samples=int(x_clean.shape[0]),
+        num_samples=int(total_n),
         seed=seed,
-        device=str(x_clean.device),
-        dtype=str(x_clean.dtype),
+        device=str(eval_device),
+        dtype=str(first_x.dtype),
         torch_version=torch.__version__,
         clean_acc=clean_acc,
         timestamp_utc=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -620,4 +886,5 @@ def evaluate_suite(
         preflight=pf_report,
         audit=audit_report,
         records=records,
+        clean_mse=clean_mse,
     )

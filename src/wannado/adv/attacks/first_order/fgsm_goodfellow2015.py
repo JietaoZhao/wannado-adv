@@ -112,7 +112,7 @@ def fgsm(
         ``AttackResult`` containing ``x_adv``, ``perturbation``, and run metadata.
     """
     t0 = time.perf_counter()
-    loss_fn = resolve_loss_fn(loss)
+    loss_fn = resolve_loss_fn(loss, targeted=targeted)
     eps_budget = resolve_eps_budget(x, eps=eps, norm=norm)
 
     if (eps_budget == 0).all():

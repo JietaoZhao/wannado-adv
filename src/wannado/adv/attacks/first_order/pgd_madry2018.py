@@ -134,7 +134,7 @@ def pgd(
 
     t0 = time.perf_counter()
     x_clean = x.detach()
-    loss_fn = resolve_loss_fn(loss)
+    loss_fn = resolve_loss_fn(loss, targeted=targeted)
     eps_budget = resolve_eps_budget(x_clean, eps=eps, norm=norm)
 
     if (eps_budget == 0).all():

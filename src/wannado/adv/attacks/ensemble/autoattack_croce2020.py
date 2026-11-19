@@ -149,6 +149,7 @@ def autoattack(
     square_queries: int = 500,
     clip_bounds: tuple[float, float] | None = None,
     seed: int | None = None,
+    batch_size: int | None = None,
 ) -> AttackResult:
     """Run AutoAttack sequential ensemble on surviving un-fooled samples.
 
@@ -167,6 +168,7 @@ def autoattack(
         square_queries: Query budget for Square Attack black-box fallback stage.
         clip_bounds: Optional valid value range ``(min, max)`` for real-valued inputs.
         seed: Optional base random seed propagated across stages.
+        batch_size: Optional mini-batch chunk size so large datasets evaluate without GPU/MPS OOM.
 
     Returns:
         ``AttackResult`` containing worst-case ensemble ``x_adv`` and per-stage accuracy trace.
@@ -176,7 +178,62 @@ def autoattack(
 
     t0 = time.perf_counter()
     x_clean = x.detach()
-    batch_size = x_clean.shape[0]
+    n_total = x_clean.shape[0]
+    if batch_size is not None and batch_size > 0 and n_total > int(batch_size):
+        chunk = int(batch_size)
+        adv_chunks: list[torch.Tensor] = []
+        stage_weighted: dict[str, float] = {}
+        stage_counts: dict[str, int] = {}
+        all_notes: list[str] = []
+        max_steps = 0
+        for chunk_idx, start in enumerate(range(0, n_total, chunk)):
+            end = min(start + chunk, n_total)
+            sub_res = autoattack(
+                model_or_fn=model_or_fn,
+                x=x_clean[start:end],
+                y=y[start:end],
+                eps=eps,
+                norm=norm,
+                version=version,
+                apgd_steps=apgd_steps,
+                apgd_restarts=apgd_restarts,
+                n_target_classes=n_target_classes,
+                fab_steps=fab_steps,
+                square_queries=square_queries,
+                clip_bounds=clip_bounds,
+                seed=None if seed is None else seed + chunk_idx * 1009,
+                batch_size=None,
+            )
+            adv_chunks.append(sub_res.x_adv)
+            max_steps = max(max_steps, sub_res.steps_run)
+            sub_n = end - start
+            for k_stage, acc_v in (sub_res.extra.get("stage_accuracies") or {}).items():
+                stage_weighted[k_stage] = stage_weighted.get(k_stage, 0.0) + float(acc_v) * sub_n
+                stage_counts[k_stage] = stage_counts.get(k_stage, 0) + sub_n
+            for note in sub_res.extra.get("autograd_notes") or []:
+                if note not in all_notes:
+                    all_notes.append(note)
+        x_adv_all = torch.cat(adv_chunks, dim=0)
+        stage_avg = {k: stage_weighted[k] / max(stage_counts[k], 1) for k in stage_weighted}
+        final_acc = stage_avg.get("square_attack", next(reversed(stage_avg.values()), 0.0))
+        return AttackResult(
+            x_adv=x_adv_all,
+            perturbation=x_adv_all - x_clean,
+            eps=eps,
+            norm=norm,
+            steps_run=max_steps,
+            attack_id=META.id,
+            elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+            extra={
+                "version": version,
+                "robust_accuracy": float(final_acc),
+                "stage_accuracies": stage_avg,
+                "autograd_notes": all_notes,
+                "batch_size": n_total,
+                "chunk_size": chunk,
+            },
+        )
+
     eps_budget = resolve_eps_budget(x_clean, eps=eps, norm=norm)
 
     if (eps_budget == 0).all():
@@ -253,9 +310,7 @@ def autoattack(
 
         # Stage 2b: Targeted APGD-DLR across top runner-up classes when multi-class
         if num_classes >= 3 and n_target_classes > 0 and surviving.any() and not autograd_notes:
-            with torch.no_grad():
-                logits_rem = model_or_fn(x_clean)
-                sorted_cls = logits_rem.argsort(dim=1, descending=True)
+            sorted_cls = clean_logits.argsort(dim=1, descending=True)
             k_targets = min(n_target_classes, num_classes - 1)
             for t_rank in range(1, k_targets + 1):
                 if not surviving.any():
@@ -338,6 +393,6 @@ def autoattack(
             "robust_accuracy": float(surviving.float().mean().item()),
             "stage_accuracies": stage_accuracies,
             "autograd_notes": autograd_notes,
-            "batch_size": batch_size,
+            "batch_size": n_total,
         },
     )
