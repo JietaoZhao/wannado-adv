@@ -211,7 +211,8 @@ def cw_l2(
                 loss_per_sample = l2_sq + const * f_loss
                 total_loss = loss_per_sample.sum()
 
-                total_loss.backward()
+                (grad_opt,) = torch.autograd.grad(total_loss, opt_var, only_inputs=True)
+                opt_var.grad = grad_opt.detach()
                 optimizer.step()
 
                 with torch.no_grad():
@@ -243,13 +244,16 @@ def cw_l2(
                 )
 
     delta = o_best_adv - x_clean
+    succeeded_mask = o_best_l2 < float("inf")
     if eps is not None:
-        within_budget = within_eps_budget(delta, x_clean, eps=eps, norm=norm).view(view_shape)
+        within_1d = within_eps_budget(delta, x_clean, eps=eps, norm=norm)
+        within_budget = within_1d.view(view_shape)
         o_best_adv = torch.where(within_budget, o_best_adv, x_clean)
         delta = o_best_adv - x_clean
+        succeeded_mask = succeeded_mask & within_1d
 
     dist_l2 = compute_perturbation_norm(delta, norm=norm, x_ref=x_clean)
-    success_rate = float((o_best_l2 < float("inf")).float().mean().item())
+    success_rate = float(succeeded_mask.float().mean().item())
     return AttackResult(
         x_adv=o_best_adv,
         perturbation=delta,

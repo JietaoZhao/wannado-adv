@@ -274,14 +274,14 @@ def advgan(
             delta_l2 = safe_l2_norm(delta_g.reshape(x_clean.shape[0], -1), dim=1)
             loss_hinge = torch.clamp(delta_l2 - hinge_c, min=0.0).mean()
 
+            if fool_score > best_fool_score:
+                best_fool_score = fool_score
+                best_state = {k: v.detach().clone() for k, v in gen_net.state_dict().items()}
+
             loss_g = loss_adv + lambda_gan * loss_gan + lambda_hinge * loss_hinge
             loss_g.backward()
             opt_g.step()
             g_history.append(float(loss_g.item()))
-
-            if fool_score > best_fool_score:
-                best_fool_score = fool_score
-                best_state = {k: v.detach().clone() for k, v in gen_net.state_dict().items()}
 
     gen_net.load_state_dict(best_state)
     gen_net.eval()

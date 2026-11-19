@@ -32,7 +32,13 @@ from torch import nn
 from wannado.adv.core.losses import normalize_classification_logits, predict_labels
 from wannado.adv.core.projections import clamp_to_bounds
 from wannado.adv.core.types import AttackCitation
-from wannado.adv.core.utils import eval_mode, iter_eval_batches, make_generator
+from wannado.adv.core.utils import (
+    eval_mode,
+    infer_model_device,
+    iter_train_batches,
+    make_generator,
+    squeeze_class_targets,
+)
 from wannado.adv.defenses.types import DefenseMeta, DefenseTrainResult, SmoothingCertificationResult
 
 META = DefenseMeta(
@@ -232,6 +238,9 @@ def gaussian_augmented_train(
     clip_bounds: tuple[Any, Any] | None = None,
     eval_data: tuple[torch.Tensor, torch.Tensor] | None = None,
     optimizer: torch.optim.Optimizer | None = None,
+    shuffle: bool = True,
+    lr_scheduler: str | None = None,
+    save_best: bool = False,
     seed: int = 42,
 ) -> DefenseTrainResult:
     """Train a base classifier under N(0, sigma^2 I) noise augmentation for Randomized Smoothing."""
@@ -241,15 +250,20 @@ def gaussian_augmented_train(
     torch.manual_seed(seed)
     dev = next((p.device for p in model.parameters()), torch.device("cpu"))
     opt = optimizer if optimizer is not None else torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(epochs, 1)) if lr_scheduler == "cosine" else None
     gen = make_generator(seed, dev)
+    shuf_gen = make_generator(seed + 1, train_data.device) if isinstance(train_data, torch.Tensor) else None
 
     history: list[dict[str, float]] = []
+    best_metric = float("-inf")
+    best_state: dict[str, torch.Tensor] | None = None
     for ep in range(epochs):
-        batches = list(iter_eval_batches(train_data, y, batch_size=batch_size, device=dev))
         ep_loss = 0.0
         n_seen = 0
-        for xb, yb in batches:
-            yb_l = yb.to(torch.long)
+        for xb, yb in iter_train_batches(
+            train_data, y, batch_size=batch_size, device=dev, shuffle=shuffle, generator=shuf_gen
+        ):
+            yb_l = squeeze_class_targets(yb, batch_size=xb.shape[0])
             x_noisy = _add_isotropic_gaussian(xb, sigma, gen, clip_bounds)
             model.train()
             opt.zero_grad()
@@ -260,14 +274,23 @@ def gaussian_augmented_train(
             bs = int(xb.shape[0])
             ep_loss += float(loss.item()) * bs
             n_seen += bs
+        if sched is not None:
+            sched.step()
         rec: dict[str, float] = {"epoch": float(ep + 1), "train_loss": ep_loss / max(n_seen, 1)}
         if eval_data is not None:
-            xe, ye = eval_data[0].to(dev), eval_data[1].to(dev, dtype=torch.long)
+            xe = eval_data[0].to(dev)
+            ye = squeeze_class_targets(eval_data[1].to(dev), batch_size=xe.shape[0])
             with eval_mode(model), torch.no_grad():
                 rec["eval_clean_acc"] = float((predict_labels(model(xe)) == ye).float().mean().item())
                 xe_noisy = _add_isotropic_gaussian(xe, sigma, gen, clip_bounds)
                 rec["eval_noisy_acc"] = float((predict_labels(model(xe_noisy)) == ye).float().mean().item())
+            if save_best and rec["eval_noisy_acc"] >= best_metric:
+                best_metric = rec["eval_noisy_acc"]
+                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
         history.append(rec)
+
+    if save_best and best_state is not None:
+        model.load_state_dict({k: v.to(dev) for k, v in best_state.items()})
 
     model.eval()
     return DefenseTrainResult(
@@ -281,6 +304,16 @@ def gaussian_augmented_train(
         extra={"sigma": float(sigma), "lr": lr},
         citation=META.to_dict()["citation"],
     )
+
+
+def _binomial_two_sided_pvalue_p05(k: int, m: int) -> float:
+    """Exact two-sided binomial p-value for H0: p = 0.5 with observed k >= m/2 out of m trials."""
+    if m <= 0:
+        return 1.0
+    hi = max(k, m - k)
+    # P(Bin(m, 0.5) >= hi) = I_{0.5}(hi, m - hi + 1); two-sided p-value is min(1, 2 * upper_tail).
+    upper = _reg_incbeta(0.5, float(hi), float(m - hi + 1)) if hi > 0 else 1.0
+    return min(1.0, 2.0 * upper)
 
 
 def _sample_class_counts(
@@ -313,13 +346,21 @@ def smooth_predict(
     *,
     sigma: float = 0.25,
     n_samples: int = 100,
+    alpha: float | None = None,
     batch_size: int = 256,
     clip_bounds: tuple[Any, Any] | None = None,
     seed: int = 42,
 ) -> torch.Tensor:
-    """Return majority-vote predictions of the Gaussian-smoothed classifier ``g(x)``."""
-    x_clean = x.detach()
-    gen = make_generator(seed, x_clean.device)
+    """Return majority-vote predictions of the Gaussian-smoothed classifier ``g(x)``.
+
+    When ``alpha`` is provided (e.g. ``0.001``), applies Cohen et al. (ICML 2019) Algorithm 2
+    two-sided binomial hypothesis test and returns ``-1`` (ABSTAIN) when the top-2 margin is not
+    statistically significant at level ``alpha``.
+    """
+    orig_dev = x.device
+    eval_dev = infer_model_device(model_or_fn, orig_dev)
+    x_clean = x.detach().to(eval_dev)
+    gen = make_generator(seed, eval_dev)
     preds: list[int] = []
     with eval_mode(model_or_fn), torch.no_grad():
         for i in range(x_clean.shape[0]):
@@ -332,9 +373,15 @@ def smooth_predict(
                 clip_bounds=clip_bounds,
                 generator=gen,
             )
-            best_c = max(counts.items(), key=lambda kv: kv[1])[0]
+            ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+            best_c, n_a = ranked[0]
+            if alpha is not None and len(ranked) >= 2:
+                n_b = ranked[1][1]
+                if _binomial_two_sided_pvalue_p05(n_a, n_a + n_b) > float(alpha):
+                    preds.append(-1)
+                    continue
             preds.append(best_c)
-    return torch.tensor(preds, device=x_clean.device, dtype=torch.long)
+    return torch.tensor(preds, device=orig_dev, dtype=torch.long)
 
 
 def certify_randomized_smoothing(
@@ -360,8 +407,12 @@ def certify_randomized_smoothing(
         raise ValueError(f"alpha must be in (0, 0.5), got {alpha}.")
 
     t0 = time.perf_counter()
-    x_clean = x.detach()
-    gen = make_generator(seed, x_clean.device)
+    eval_dev = infer_model_device(model_or_fn, x.device)
+    x_clean = x.detach().to(eval_dev)
+    gen = make_generator(seed, eval_dev)
+    # Complex inputs inject N(0, (sigma/sqrt(2))^2) independently per I/Q axis; the isomorphic
+    # Euclidean L2 noise scale in R^{2d} is sigma / sqrt(2), so Cohen Theorem 1 certifies R = (sigma/sqrt(2))*Phi^{-1}(p_A).
+    eff_sigma = float(sigma) / math.sqrt(2.0) if x_clean.is_complex() else float(sigma)
 
     preds: list[int] = []
     radii: list[float] = []
@@ -390,7 +441,7 @@ def certify_randomized_smoothing(
             p_low = clopper_pearson_lower(n_a, n, alpha)
             if p_low > 0.5:
                 preds.append(c_hat)
-                radii.append(float(sigma * norm_ppf(p_low)))
+                radii.append(float(eff_sigma * norm_ppf(p_low)))
             else:
                 preds.append(-1)
                 radii.append(0.0)

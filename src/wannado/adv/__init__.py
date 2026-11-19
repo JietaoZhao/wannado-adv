@@ -11,7 +11,7 @@ from typing import Any
 
 from wannado.adv.attacks import ATTACK_EXPORTS, lazy_resolve
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 
 _SUBMODULES = frozenset(
     {
@@ -94,6 +94,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "AttackMeta": ("wannado.adv.core.types", "AttackMeta"),
     "AttackResult": ("wannado.adv.core.types", "AttackResult"),
     "DefendedModelWrapper": ("wannado.adv.core.utils", "DefendedModelWrapper"),
+    "NormalizedModelWrapper": ("wannado.adv.core.utils", "NormalizedModelWrapper"),
     "SklearnModelAdapter": ("wannado.adv.core.utils", "SklearnModelAdapter"),
     "clamp_to_bounds": ("wannado.adv.core.projections", "clamp_to_bounds"),
     "coerce_clip_bounds": ("wannado.adv.core.projections", "coerce_clip_bounds"),
@@ -107,6 +108,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "random_init_perturbation": ("wannado.adv.core.projections", "random_init_perturbation"),
     "resolve_eps_budget": ("wannado.adv.core.projections", "resolve_eps_budget"),
     "unwrap_model_outputs": ("wannado.adv.core.losses", "unwrap_model_outputs"),
+    "wrap_normalized_model": ("wannado.adv.core.utils", "wrap_normalized_model"),
     "wrap_sklearn_model": ("wannado.adv.core.utils", "wrap_sklearn_model"),
 }
 
@@ -121,6 +123,7 @@ __all__ = [
     "DefenseTrainResult",
     "EvaluationReport",
     "ModelContextProbe",
+    "NormalizedModelWrapper",
     "PreflightReport",
     "ProjectScan",
     "RecommendedSuite",
@@ -214,6 +217,7 @@ __all__ = [
     "vmi_fgsm",
     "vmifgsm",
     "wilson_ci",
+    "wrap_normalized_model",
     "wrap_sklearn_model",
     "zoo",
 ]

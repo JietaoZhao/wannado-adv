@@ -35,8 +35,13 @@ from wannado.adv.attacks.first_order.pgd_madry2018 import pgd
 from wannado.adv.attacks.physical_and_eot.bpda_eot_athalye2018 import bpda_eot
 from wannado.adv.attacks.physical_and_eot.eot_pgd_athalye2018 import eot_pgd
 from wannado.adv.audit.preflight import preflight
-from wannado.adv.core.losses import predict_labels, unwrap_model_outputs
-from wannado.adv.core.projections import random_init_perturbation, resolve_eps_budget
+from wannado.adv.core.losses import predict_labels, resolve_loss_fn, unwrap_model_outputs
+from wannado.adv.core.projections import (
+    clamp_to_bounds,
+    project_perturbation,
+    random_init_perturbation,
+    resolve_eps_budget,
+)
 from wannado.adv.core.utils import DefendedModelWrapper, eval_mode, make_generator, materialize_eval_tensors
 
 
@@ -70,15 +75,23 @@ class AuditReport:
         lines.append("Checks:")
         for k, v in self.checks.items():
             lines.append(f"  - {k}: {'OK' if v else 'FAIL'}")
-        lines.append(
-            f"Accuracies -> clean: {self.metrics.get('clean_acc', 0.0):.3f}, "
-            f"random: {self.metrics.get('random_acc', 0.0):.3f}, "
-            f"fgsm: {self.metrics.get('fgsm_acc', 0.0):.3f}, "
-            f"pgd: {self.metrics.get('pgd_acc', 0.0):.3f}, "
-            f"apgd_ce: {self.metrics.get('apgd_ce_acc', 0.0):.3f}, "
-            f"apgd_dlr: {self.metrics.get('apgd_dlr_acc', 0.0):.3f}, "
-            f"square: {self.metrics.get('square_acc', 0.0):.3f}"
-        )
+        if self.metrics.get("task_type") == "continuous":
+            lines.append(
+                f"Continuous Errors -> clean_mse: {self.metrics.get('clean_mse', 0.0):.4g}, "
+                f"random: {self.metrics.get('random_mse', 0.0):.4g}, "
+                f"fgsm: {self.metrics.get('fgsm_mse', 0.0):.4g}, "
+                f"pgd: {self.metrics.get('pgd_mse', 0.0):.4g}"
+            )
+        else:
+            lines.append(
+                f"Accuracies -> clean: {self.metrics.get('clean_acc', 0.0):.3f}, "
+                f"random: {self.metrics.get('random_acc', 0.0):.3f}, "
+                f"fgsm: {self.metrics.get('fgsm_acc', 0.0):.3f}, "
+                f"pgd: {self.metrics.get('pgd_acc', 0.0):.3f}, "
+                f"apgd_ce: {self.metrics.get('apgd_ce_acc', 0.0):.3f}, "
+                f"apgd_dlr: {self.metrics.get('apgd_dlr_acc', 0.0):.3f}, "
+                f"square: {self.metrics.get('square_acc', 0.0):.3f}"
+            )
         if self.recommendations:
             lines.append("Recommendations:")
             lines.extend(f"  - {rec}" for rec in self.recommendations)
@@ -164,7 +177,7 @@ def _safe_attack_continuous(
 def _probe_stochasticity(
     victim: Callable[[torch.Tensor], torch.Tensor],
     x_probe: torch.Tensor,
-) -> tuple[bool, float, bool]:
+) -> tuple[bool, float, float, float, bool]:
     """Run two forward passes on identical clean inputs to detect test-time stochasticity & hard-label outputs."""
     with eval_mode(victim), torch.no_grad():
         out1 = unwrap_model_outputs(victim(x_probe))
@@ -172,7 +185,81 @@ def _probe_stochasticity(
     is_hard_label = out1.dtype in (torch.int64, torch.int32, torch.int16, torch.int8, torch.uint8, torch.bool)
     diff = (out1.float() - out2.float()).abs() if is_hard_label else (out1 - out2).abs()
     max_diff = float(diff.max().item()) if diff.numel() > 0 else 0.0
-    return max_diff > 1e-5, max_diff, is_hard_label
+    scale = (
+        max(float((out1.abs() if out1.is_complex() else out1.float().abs()).max().item()), 1e-12)
+        if out1.numel() > 0
+        else 1.0
+    )
+    rel_diff = max_diff / scale
+    flip_rate = 0.0
+    if out1.numel() > 0 and (is_hard_label or out1.ndim >= 2):
+        p1 = predict_labels(out1)
+        p2 = predict_labels(out2)
+        flip_rate = float((p1 != p2).float().mean().item())
+    is_stoch = (max_diff > 1e-5) or (rel_diff > 1e-3) or (flip_rate > 0.0)
+    return is_stoch, max_diff, rel_diff, flip_rate, is_hard_label
+
+
+def _l1_blackbox_probe_acc(
+    victim: Callable[[torch.Tensor], torch.Tensor],
+    x_clean: torch.Tensor,
+    y: torch.Tensor,
+    *,
+    eps: float,
+    clip_bounds: tuple[Any, Any] | None,
+    max_queries: int = 100,
+    mc_draws: int = 1,
+    seed: int = 0,
+) -> float:
+    """Gradient-free sparse coordinate-block L1 hill-climber to catch gradient obfuscation under norm='l1'."""
+    if eps <= 0.0:
+        return _eval_acc(victim, x_clean, y, mc_draws=mc_draws)
+    bsz = x_clean.shape[0]
+    flat_dim = x_clean[0].numel()
+    gen = make_generator(seed, x_clean.device)
+    eps_budget = resolve_eps_budget(x_clean, eps=eps, norm="l1")
+    is_complex = x_clean.is_complex()
+
+    margin_fn = resolve_loss_fn("margin")
+
+    def _score_loss(x_in: torch.Tensor) -> torch.Tensor:
+        out = unwrap_model_outputs(victim(x_in))
+        if out.dtype in (torch.int64, torch.int32, torch.int16, torch.int8, torch.uint8, torch.bool):
+            return (out.reshape(bsz) != y).float()
+        return margin_fn(out, y)
+
+    with eval_mode(victim), torch.no_grad():
+        delta = torch.zeros_like(x_clean)
+        best_loss = _score_loss(x_clean)
+        k_coords = max(1, min(flat_dim, max(2, flat_dim // 16)))
+        n_iters = max(20, int(max_queries))
+        for q in range(n_iters):
+            frac = max(0.15, 1.0 - 0.7 * (q / max(n_iters, 1)))
+            step_mag = float(eps) * frac / float(k_coords)
+            prop = delta.reshape(bsz, flat_dim).clone()
+            idx = torch.randint(0, flat_dim, (bsz, k_coords), generator=gen, device=x_clean.device)
+            if is_complex:
+                ang = torch.rand((bsz, k_coords), generator=gen, device=x_clean.device, dtype=x_clean.real.dtype) * (2.0 * math.pi)
+                step_val = torch.polar(torch.full_like(ang, step_mag), ang).to(x_clean.dtype)
+            else:
+                signs = torch.where(
+                    torch.rand((bsz, k_coords), generator=gen, device=x_clean.device) < 0.5,
+                    torch.full((bsz, k_coords), -step_mag, device=x_clean.device, dtype=x_clean.dtype),
+                    torch.full((bsz, k_coords), step_mag, device=x_clean.device, dtype=x_clean.dtype),
+                )
+                step_val = signs
+            prop.scatter_add_(1, idx, step_val)
+            cand_delta = prop.reshape_as(x_clean)
+            cand_delta = project_perturbation(cand_delta, x_clean, eps_budget, norm="l1", clip_bounds=clip_bounds)
+            cand_x = x_clean + cand_delta
+            cand_loss = _score_loss(cand_x)
+            improved = cand_loss > best_loss
+            if bool(improved.any()):
+                best_loss = torch.where(improved, cand_loss, best_loss)
+                mask = improved.view(bsz, *([1] * (x_clean.ndim - 1)))
+                delta = torch.where(mask, cand_delta, delta)
+
+        return _eval_acc(victim, clamp_to_bounds(x_clean + delta, clip_bounds), y, mc_draws=mc_draws)
 
 
 def audit_robustness(
@@ -203,11 +290,10 @@ def audit_robustness(
         6. Test-time stochasticity / randomization masking check (`deterministic_or_eot_verified`).
         7. Optional `defense_fn` BPDA+EoT cross-check (`defense_bpda_consistent`).
     """
-    dev: torch.device | None = None
-    if not isinstance(x, torch.Tensor) and isinstance(model_or_fn, torch.nn.Module):
-        for p in model_or_fn.parameters():
-            dev = p.device
-            break
+    from wannado.adv.core.utils import infer_model_device, squeeze_class_targets
+
+    fallback_dev = x.device if isinstance(x, torch.Tensor) else torch.device("cpu")
+    dev = infer_model_device(model_or_fn, fallback_dev)
     x_clean, y_clean = materialize_eval_tensors(x, y, max_samples=max_samples, device=dev)
     if x_clean.shape[0] < 2:
         raise ValueError(f"audit_robustness expects batch size >= 2, got {x_clean.shape[0]}.")
@@ -226,6 +312,8 @@ def audit_robustness(
         torch.uint8,
         torch.long,
     )
+    if is_classification:
+        y = squeeze_class_targets(y, batch_size=batch_size)
     pf_loss: str | None = "ce" if is_classification else "mse"
     pre = preflight(
         model_or_fn,
@@ -254,11 +342,12 @@ def audit_robustness(
     if not x_clean.is_complex() and norm in ("linf", "l2", "l1") and eps > 0:
         span = max(float((x_clean.max() - x_clean.min()).item()), 1e-6)
         eff_eps = eps / math.sqrt(max(1, x_clean[0].numel())) if norm == "l2" else eps
-        if eff_eps / span < 5e-4:
+        min_rel_ratio = 1e-4 if norm == "l2" else 5e-4
+        if eff_eps / span < min_rel_ratio:
             eps_scale_meaningful = False
             red_flags.append("eps_scale_mismatch_trivial_budget")
             recommendations.append(
-                f"Perturbation budget eps={eps:.4g} under norm='{norm}' is <0.05% of the input dynamic range "
+                f"Perturbation budget eps={eps:.4g} under norm='{norm}' is tiny relative to the input dynamic range "
                 f"(span={span:.4g}). Rescale eps to the domain's physical units or normalize inputs to [0, 1]."
             )
 
@@ -268,7 +357,7 @@ def audit_robustness(
     ce_grad_mean = float(grad_probe.get("grad_norm_mean", 0.0))
     margin_grad_mean = grad_probe.get("margin_grad_norm_mean")
 
-    is_stochastic, stoch_diff, is_hard_label_only = _probe_stochasticity(
+    is_stochastic, stoch_diff, stoch_rel_diff, stoch_flip_rate, is_hard_label_only = _probe_stochasticity(
         deployed_victim, x_clean[: min(batch_size, 16)]
     )
     mc_draws = 3 if is_stochastic else 1
@@ -409,7 +498,10 @@ def audit_robustness(
                 apgd_l1, deployed_victim, x_clean, y, clean_acc, mc_draws=mc_draws,
                 eps=eps, steps=apgd_steps, restarts=1, loss="dlr", clip_bounds=clip_bounds, seed=seed + 2,
             )
-            square_acc = clean_acc
+            square_acc = _l1_blackbox_probe_acc(
+                deployed_victim, x_clean, y, eps=eps, clip_bounds=clip_bounds,
+                max_queries=max(60, min(square_queries, 120)), mc_draws=mc_draws, seed=seed + 3,
+            )
         else:
             apgd_ce_acc, err_ce = _safe_attack_acc(
                 apgd_ce, deployed_victim, x_clean, y, clean_acc, mc_draws=mc_draws,
@@ -494,14 +586,20 @@ def audit_robustness(
         iterative_beats_single_step = False
         whitebox_beats_random = False
 
-    whitebox_beats_blackbox = True if norm == "l1" else (square_acc >= best_whitebox_acc - tol_bb)
+    whitebox_beats_blackbox = square_acc >= best_whitebox_acc - tol_bb
     monotonic_over_budget = (
         (acc_mid <= acc_low + tol_bb)
         and (acc_high <= acc_mid + tol_bb)
         and (acc_high <= acc_low + tol_bb)
     )
     deterministic_or_eot_verified = not (
-        is_stochastic and (stoch_diff > 1e-2 or (eot_acc is not None and eot_acc < pgd_acc - tol_single))
+        is_stochastic
+        and (
+            stoch_diff > 1e-2
+            or stoch_rel_diff > 1e-2
+            or stoch_flip_rate > 0.0
+            or (eot_acc is not None and eot_acc < pgd_acc - tol_single)
+        )
     )
     defense_bpda_consistent = True if bpda_acc is None else (bpda_acc >= naive_whitebox_acc - tol_bb)
 
@@ -527,8 +625,9 @@ def audit_robustness(
         )
     if not whitebox_beats_blackbox:
         red_flags.append("gradient_obfuscation_blackbox_beats_whitebox")
+        bb_name = "L1 Black-box Probe" if norm == "l1" else "Square Attack"
         recommendations.append(
-            f"Black-box Square Attack ({square_acc:.3f}) outperformed white-box best ({best_whitebox_acc:.3f}), "
+            f"Black-box {bb_name} ({square_acc:.3f}) outperformed white-box best ({best_whitebox_acc:.3f}), "
             "indicating gradient obfuscation or shattered gradients."
         )
     if autograd_ok and iterative_ran and not iterative_beats_single_step:
@@ -566,6 +665,8 @@ def audit_robustness(
         "task_type": "classification",
         "is_stochastic": is_stochastic,
         "stochastic_max_output_diff": stoch_diff,
+        "stochastic_rel_output_diff": stoch_rel_diff,
+        "stochastic_flip_rate": stoch_flip_rate,
         "is_hard_label_only": is_hard_label_only,
         "clean_acc": clean_acc,
         "random_acc": random_acc,

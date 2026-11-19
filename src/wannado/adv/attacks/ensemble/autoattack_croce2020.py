@@ -253,6 +253,9 @@ def autoattack(
     autograd_notes: list[str] = []
     total_steps = 0
 
+    y_cls = y.squeeze(1).to(torch.long) if y.ndim == 2 and y.shape[1] == 1 else y.to(torch.long)
+    y = y_cls
+
     with eval_mode(model_or_fn):
         with torch.no_grad():
             clean_logits = normalize_classification_logits(model_or_fn(x_clean))
@@ -309,35 +312,36 @@ def autoattack(
         stage_accuracies["apgd_dlr"] = float(surviving.float().mean().item())
 
         # Stage 2b: Targeted APGD-DLR across top runner-up classes when multi-class
-        if num_classes >= 3 and n_target_classes > 0 and surviving.any() and not autograd_notes:
-            sorted_cls = clean_logits.argsort(dim=1, descending=True)
-            k_targets = min(n_target_classes, num_classes - 1)
-            for t_rank in range(1, k_targets + 1):
-                if not surviving.any():
-                    break
-                idx = torch.nonzero(surviving, as_tuple=False).squeeze(1)
-                rank_targets = sorted_cls[idx, t_rank]
-                # Ensure target class != true y for each item
-                fallback = (y[idx] + t_rank) % num_classes
-                y_target = torch.where(rank_targets != y[idx], rank_targets, fallback)
-                res = _run_whitebox_stage(
-                    f"apgd_t_{t_rank}",
-                    apgd_dlr,
-                    autograd_notes,
-                    model_or_fn,
-                    x_clean[idx],
-                    y_target,
-                    eps=eps,
-                    steps=max(20, apgd_steps // 2),
-                    restarts=1,
-                    norm=norm,
-                    targeted=True,
-                    clip_bounds=clip_bounds,
-                    seed=None if seed is None else seed + 10 + t_rank,
-                )
-                if res is not None:
-                    total_steps += res.steps_run
-                    surviving = _apply_stage_result(model_or_fn, x_adv, y, surviving, res.x_adv)
+        if num_classes >= 3 and n_target_classes > 0 and not autograd_notes:
+            if surviving.any():
+                sorted_cls = clean_logits.argsort(dim=1, descending=True)
+                k_targets = min(n_target_classes, num_classes - 1)
+                for t_rank in range(1, k_targets + 1):
+                    if not surviving.any():
+                        break
+                    idx = torch.nonzero(surviving, as_tuple=False).squeeze(1)
+                    rank_targets = sorted_cls[idx, t_rank]
+                    # Ensure target class != true y for each item
+                    fallback = (y[idx] + t_rank) % num_classes
+                    y_target = torch.where(rank_targets != y[idx], rank_targets, fallback)
+                    res = _run_whitebox_stage(
+                        f"apgd_t_{t_rank}",
+                        apgd_dlr,
+                        autograd_notes,
+                        model_or_fn,
+                        x_clean[idx],
+                        y_target,
+                        eps=eps,
+                        steps=max(20, apgd_steps // 2),
+                        restarts=1,
+                        norm=norm,
+                        targeted=True,
+                        clip_bounds=clip_bounds,
+                        seed=None if seed is None else seed + 10 + t_rank,
+                    )
+                    if res is not None:
+                        total_steps += res.steps_run
+                        surviving = _apply_stage_result(model_or_fn, x_adv, y, surviving, res.x_adv)
             stage_accuracies["apgd_t"] = float(surviving.float().mean().item())
 
         # Stage 3: FAB (geometric boundary fallback inside eps budget)

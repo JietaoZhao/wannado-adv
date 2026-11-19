@@ -108,11 +108,15 @@ def _l1_steepest_step(
     dim = flat_g.shape[1]
 
     if clip_bounds is not None and not grad.is_complex():
-        low, high = clip_bounds
+        from wannado.adv.core.projections import coerce_clip_bounds
+
+        low_t, high_t = coerce_clip_bounds(clip_bounds, x_adv)
+        flat_low = low_t.expand_as(x_adv).reshape(b, -1)
+        flat_high = high_t.expand_as(x_adv).reshape(b, -1)
         flat_x = x_adv.reshape(b, -1)
         # Mask out coordinates already pinned against the box boundary in the gradient direction.
-        at_low = (flat_x <= low + 1e-6) & (flat_g < 0)
-        at_high = (flat_x >= high - 1e-6) & (flat_g > 0)
+        at_low = (flat_x <= flat_low + 1e-6) & (flat_g < 0)
+        at_high = (flat_x >= flat_high - 1e-6) & (flat_g > 0)
         feasible = ~(at_low | at_high)
         flat_g = torch.where(feasible, flat_g, torch.zeros_like(flat_g))
 

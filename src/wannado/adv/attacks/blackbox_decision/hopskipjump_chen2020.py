@@ -116,6 +116,8 @@ def _norm_distance(x_ref: torch.Tensor, x_cand: torch.Tensor, norm: str) -> floa
     diff = (x_cand - x_ref).reshape(-1)
     if norm == "linf":
         return float(diff.abs().max().item())
+    if norm == "l1":
+        return float(diff.abs().sum().item())
     return float(safe_l2_norm(diff, dim=None).item())
 
 
@@ -492,7 +494,12 @@ def hopskipjump(
     with eval_mode(model_or_fn), torch.no_grad():
         clean_preds, q0 = _query_decisions(model_or_fn, x_clean)
         total_queries += q0
-        ref_labels = y if y is not None else clean_preds
+        if y is not None:
+            ref_labels = y.squeeze(1) if y.ndim == 2 and y.shape[1] == 1 else y
+            ref_labels = ref_labels.to(torch.long)
+        else:
+            ref_labels = clean_preds
+        succeeded = torch.zeros(batch_size, dtype=torch.bool, device=x_clean.device)
 
         for i in range(batch_size):
             if max_queries is not None and total_queries >= max_queries:
@@ -501,7 +508,7 @@ def hopskipjump(
             clean_pred_i = int(clean_preds[i].item())
             already_adv = (clean_pred_i == ref_i) if targeted else (y is not None and clean_pred_i != ref_i)
             if already_adv:
-                success_count += 1
+                succeeded[i] = True
                 continue
 
             pool_i = x_init[i : i + 1] if (x_init is not None and x_init.shape[0] == batch_size) else x_init
@@ -525,15 +532,16 @@ def hopskipjump(
             total_queries += q_i
             if ok_i:
                 x_adv[i] = adv_i[0]
-                success_count += 1
+                succeeded[i] = True
 
     delta = x_adv - x_clean
     if eps is not None:
-        within_budget = within_eps_budget(delta, x_clean, eps=eps, norm=norm).view(
-            (batch_size,) + (1,) * (x_clean.ndim - 1)
-        )
+        within_mask = within_eps_budget(delta, x_clean, eps=eps, norm=norm)
+        within_budget = within_mask.view((batch_size,) + (1,) * (x_clean.ndim - 1))
         x_adv = torch.where(within_budget, x_adv, x_clean)
         delta = x_adv - x_clean
+        succeeded = succeeded & within_mask
+    success_count = int(succeeded.sum().item())
 
     dist_norm = compute_perturbation_norm(delta, norm=norm, x_ref=x_clean)
     return AttackResult(

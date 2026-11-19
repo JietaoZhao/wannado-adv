@@ -11,6 +11,116 @@ import torch
 from torch import nn
 
 
+class NormalizedModelWrapper(nn.Module):
+    """Differentiable input normalization wrapper ``model((x - mean) / std)`` for ``[0, 1]`` pixel attacks.
+
+    Solves the #1 real-world vision pitfall (``torchvision`` / ``timm`` ImageNet/CIFAR normalization):
+    attacks perturb raw ``[0, 1]`` inputs under exact ``eps=8/255`` and ``clip_bounds=(0, 1)``, while
+    gradients flow seamlessly through channel-wise ``(x - mean) / std`` into the wrapped classifier.
+    """
+
+    mean: torch.Tensor
+    std: torch.Tensor
+
+    def __init__(
+        self,
+        model_or_fn: Callable[[torch.Tensor], torch.Tensor],
+        mean: tuple[float, ...] | list[float] | torch.Tensor = (0.485, 0.456, 0.406),
+        std: tuple[float, ...] | list[float] | torch.Tensor = (0.229, 0.224, 0.225),
+    ) -> None:
+        super().__init__()
+        self._base_model = model_or_fn
+        if isinstance(model_or_fn, nn.Module):
+            self.base_module: nn.Module | None = model_or_fn
+            self.training = model_or_fn.training
+        else:
+            self.base_module = None
+            self.training = False
+        m_t = torch.as_tensor(mean, dtype=torch.float32)
+        s_t = torch.as_tensor(std, dtype=torch.float32).clamp(min=1e-12)
+        self.register_buffer("mean", m_t)
+        self.register_buffer("std", s_t)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        m = self.mean.to(device=x.device, dtype=x.dtype)
+        s = self.std.to(device=x.device, dtype=x.dtype)
+        if m.ndim == 1 and x.ndim >= 3 and x.shape[1] == m.shape[0]:
+            view = (1, m.shape[0]) + (1,) * (x.ndim - 2)
+            m = m.view(view)
+            s = s.view(view)
+        elif m.ndim == 1 and x.ndim == 2 and x.shape[1] == m.shape[0]:
+            m = m.view(1, -1)
+            s = s.view(1, -1)
+        return self._base_model((x - m) / s)
+
+
+def infer_model_device(
+    model_or_fn: Callable[[torch.Tensor], torch.Tensor],
+    fallback: torch.device,
+) -> torch.device:
+    """Return the device of an ``nn.Module``'s parameters/buffers, falling back cleanly for callables."""
+    if isinstance(model_or_fn, nn.Module):
+        for p in model_or_fn.parameters():
+            return p.device
+        for b in model_or_fn.buffers():
+            return b.device
+    return fallback
+
+
+def iter_train_batches(
+    train_data: torch.Tensor | Iterable[tuple[torch.Tensor, torch.Tensor]],
+    y: torch.Tensor | None = None,
+    *,
+    batch_size: int = 64,
+    device: torch.device | str | None = None,
+    shuffle: bool = True,
+    generator: torch.Generator | None = None,
+) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+    """Stream mini-batches onto ``device`` one batch at a time (O(batch_size) VRAM) with optional Tensor shuffle."""
+    dev = torch.device(device) if device is not None else None
+    if isinstance(train_data, torch.Tensor):
+        if y is None:
+            raise ValueError("Target tensor `y` must be provided when `train_data` is a torch.Tensor.")
+        x_t = train_data.detach()
+        y_t = y.detach()
+        n = x_t.shape[0]
+        if n == 0:
+            raise ValueError("Training tensor `train_data` is empty.")
+        chunk = max(1, int(batch_size))
+        if shuffle and n > 1:
+            perm = torch.randperm(n, generator=generator, device=x_t.device)
+            x_t = x_t[perm]
+            y_t = y_t[perm]
+        for start in range(0, n, chunk):
+            end = min(start + chunk, n)
+            xb = x_t[start:end]
+            yb = y_t[start:end]
+            if dev is not None:
+                xb = xb.to(dev)
+                yb = yb.to(dev)
+            yield xb, yb
+        return
+
+    yielded = 0
+    for xb, yb in iter_eval_batches(train_data, None, batch_size=None, device=dev):
+        yielded += 1
+        yield xb, yb
+    if yielded == 0:
+        raise ValueError(
+            "Training iterable yielded zero batches. Pass a reusable PyTorch DataLoader or Tensor (x, y) "
+            "rather than an exhausted single-pass generator."
+        )
+
+
+def squeeze_class_targets(y: torch.Tensor, batch_size: int | None = None) -> torch.Tensor:
+    """Normalize ``(B,)`` or ``(B, 1)`` integer classification labels to 1D ``(B,)`` ``torch.long``."""
+    if y.ndim == 2 and y.shape[1] == 1:
+        return y.squeeze(1).to(torch.long)
+    if batch_size is not None and y.ndim == 0 and batch_size == 1:
+        return y.reshape(1).to(torch.long)
+    return y.to(torch.long)
+
+
 class DefendedModelWrapper(nn.Module):
     """Composable ``nn.Module`` wrapping ``model_or_fn(defense_fn(x))`` while preserving ``eval()`` isolation."""
 
@@ -96,6 +206,34 @@ def iter_eval_batches(
             yield xb, yb
         if cap is not None and seen >= cap:
             break
+
+
+def make_reiterable_eval_batches(
+    x_or_loader: torch.Tensor | Iterable[tuple[torch.Tensor, torch.Tensor]],
+    y: torch.Tensor | None = None,
+    *,
+    batch_size: int | None = None,
+    max_samples: int | None = None,
+) -> Callable[[], Iterator[tuple[torch.Tensor, torch.Tensor]]]:
+    """Return a zero-arg factory yielding deterministic ``(x_batch, y_batch)`` chunks.
+
+    Streams lazily in O(batch_size) memory for ``torch.Tensor``, ``Sequence``s, and
+    non-shuffled ``DataLoader``s (``SequentialSampler``). One-shot iterators or shuffled
+    loaders are cached once so per-sample alignment stays exact across multi-attack passes.
+    """
+    from collections.abc import Sequence as _Seq
+
+    from torch.utils.data import DataLoader as _DL
+    from torch.utils.data import SequentialSampler as _SeqSampler
+
+    is_deterministic_reiterable = (
+        isinstance(x_or_loader, (torch.Tensor, _Seq))
+        or (isinstance(x_or_loader, _DL) and isinstance(getattr(x_or_loader, "sampler", None), _SeqSampler))
+    )
+    if is_deterministic_reiterable:
+        return lambda: iter_eval_batches(x_or_loader, y, batch_size=batch_size, max_samples=max_samples)
+    cached = list(iter_eval_batches(x_or_loader, y, batch_size=batch_size, max_samples=max_samples))
+    return lambda: iter(cached)
 
 
 def materialize_eval_tensors(
@@ -208,8 +346,20 @@ class SklearnModelAdapter:
             if dec.ndim == 1:
                 dec = dec[:, None]
             return torch.from_numpy(dec).to(device=x.device, dtype=out_dtype)
-        preds = np.asarray(self.estimator.predict(x_np), dtype=np.int64).reshape(-1)
+        preds_arr = np.asarray(self.estimator.predict(x_np))
+        if np.issubdtype(preds_arr.dtype, np.floating):
+            return torch.from_numpy(preds_arr.astype(np.float32)).to(device=x.device, dtype=out_dtype)
+        preds = preds_arr.astype(np.int64).reshape(-1)
         return torch.from_numpy(preds).to(device=x.device)
+
+
+def wrap_normalized_model(
+    model_or_fn: Callable[[torch.Tensor], torch.Tensor],
+    mean: tuple[float, ...] | list[float] | torch.Tensor = (0.485, 0.456, 0.406),
+    std: tuple[float, ...] | list[float] | torch.Tensor = (0.229, 0.224, 0.225),
+) -> NormalizedModelWrapper:
+    """Wrap a vision/tabular model with differentiable ``(x - mean) / std`` input normalization."""
+    return NormalizedModelWrapper(model_or_fn, mean=mean, std=std)
 
 
 def wrap_sklearn_model(

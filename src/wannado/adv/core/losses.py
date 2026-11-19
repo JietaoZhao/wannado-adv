@@ -80,7 +80,9 @@ def _dlr_loss(logits: torch.Tensor, y: torch.Tensor, targeted: bool = False) -> 
     flat_logits, flat_y, batch_size, is_dense = _flatten_dense_logits(logits, y)
     num_classes = flat_logits.shape[1]
     if num_classes < 3:
-        spread = (flat_logits.amax(dim=1) - flat_logits.amin(dim=1)).clamp(min=1e-12)
+        # Detach spread so binary DLR stays scale-invariant while keeping non-zero margin gradient
+        # (dividing margin by non-detached |z_0 - z_1| collapses to piecewise constant +/-1 with 0 grad).
+        spread = (flat_logits.amax(dim=1) - flat_logits.amin(dim=1)).detach().clamp(min=1e-12)
         margin_raw = _margin_loss(flat_logits, flat_y)
         out = margin_raw / spread
         return out.reshape(batch_size, -1).mean(dim=1) if is_dense else out

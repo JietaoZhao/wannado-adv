@@ -222,14 +222,17 @@ def ead(
                 )
 
     delta = o_best_adv - x_clean
+    succeeded_mask = o_best_score < float("inf")
     if eps is not None:
-        within_budget = within_eps_budget(delta, x_clean, eps=eps, norm=norm).view(view_shape)
+        within_1d = within_eps_budget(delta, x_clean, eps=eps, norm=norm)
+        within_budget = within_1d.view(view_shape)
         o_best_adv = torch.where(within_budget, o_best_adv, x_clean)
         delta = o_best_adv - x_clean
+        succeeded_mask = succeeded_mask & within_1d
 
     dist = compute_perturbation_norm(delta, norm=norm, x_ref=x_clean)
     l0_dist = compute_perturbation_norm(delta, norm="l0")
-    success_rate = float((o_best_score < float("inf")).float().mean().item())
+    success_rate = float(succeeded_mask.float().mean().item())
     return AttackResult(
         x_adv=o_best_adv,
         perturbation=delta,

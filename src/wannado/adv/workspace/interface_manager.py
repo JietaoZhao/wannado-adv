@@ -265,11 +265,12 @@ def main() -> None:
     if victim.defense_fn is not None and "bpda_eot" not in attacks:
         attacks.append("bpda_eot")
 
+    eval_n = len(victim.x_eval) if isinstance(victim.x_eval, torch.Tensor) else args.samples
     eta = estimate_runtime(
         victim.model_or_fn,
         victim.x_eval,
         suite,
-        num_samples=len(victim.x_eval),
+        num_samples=eval_n,
         include_audit=(not args.no_audit),
     )
     print(eta.format_summary())

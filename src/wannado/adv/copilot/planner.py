@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -13,7 +13,7 @@ from torch import nn
 
 from wannado.adv.catalog.build_catalog import load_catalog, query_catalog
 from wannado.adv.copilot.project_inspector import ModelContextProbe, ProjectScan
-from wannado.adv.core.utils import eval_mode
+from wannado.adv.core.utils import eval_mode, infer_model_device, materialize_eval_tensors
 
 
 @dataclass
@@ -177,7 +177,29 @@ def recommend_suite(
         )
     else:
         effective_tm = "white_box"
-        if domain == "unsupervised":
+        if norm == "l1":
+            if goal == "sanity":
+                attacks = ["apgd_l1"]
+                kwargs["apgd_l1"] = {"steps": 20, "restarts": 1}
+                rationale = "Fast L1 sanity check: Mind-the-Box APGD-L1 is specialized for exact L1 simplex/box geometry."
+            elif goal == "standard":
+                attacks = ["apgd_l1", "ead"]
+                kwargs["apgd_l1"] = {"steps": 40, "restarts": 2}
+                kwargs["ead"] = {"steps": 60}
+                rationale = (
+                    "Balanced L1 robustness suite pairing Mind-the-Box APGD-L1 with Elastic-Net L1/L2 (EAD) "
+                    "without incompatible Linf/L2-only attacks."
+                )
+            else:
+                attacks = ["apgd_l1", "ead", "sparsefool"]
+                kwargs["apgd_l1"] = {"steps": 60, "restarts": 2}
+                kwargs["ead"] = {"steps": 80}
+                kwargs["sparsefool"] = {"max_iter": 12}
+                rationale = (
+                    "Publication-grade L1/sparse robustness suite combining APGD-L1, EAD, and SparseFool "
+                    "all verified for native L1 geometry."
+                )
+        elif domain == "unsupervised":
             attacks = ["fgsm", "pgd"] if goal == "sanity" else ["fgsm", "pgd", "tpgd"]
             kwargs["pgd"] = {"steps": 10 if goal == "sanity" else 30}
             rationale = "Unsupervised / representation model: using FGSM baseline, PGD, and KL-divergence TPGD."
@@ -202,19 +224,13 @@ def recommend_suite(
                 "and a blind gradient-free probe (Square Attack) so a model cannot fake safety via broken gradients."
             )
         else:
-            if norm == "l1":
-                attacks = ["pgd", "apgd_l1", "ead", "square_attack"]
-                kwargs["apgd_l1"] = {"steps": 50}
-                kwargs["ead"] = {"steps": 80}
-                kwargs["square_attack"] = {"max_queries": 500}
-            else:
-                attacks = ["fgsm", "pgd", "vmi_fgsm", "apgd_ce", "apgd_dlr", "square_attack", "autoattack"]
-                kwargs["pgd"] = {"steps": 40, "restarts": 2}
-                kwargs["vmi_fgsm"] = {"steps": 20, "num_variance_samples": 10}
-                kwargs["apgd_ce"] = {"steps": 50, "restarts": 2}
-                kwargs["apgd_dlr"] = {"steps": 50, "restarts": 2}
-                kwargs["square_attack"] = {"max_queries": 500}
-                kwargs["autoattack"] = {"version": "standard", "apgd_steps": 50, "square_queries": 500}
+            attacks = ["fgsm", "pgd", "vmi_fgsm", "apgd_ce", "apgd_dlr", "square_attack", "autoattack"]
+            kwargs["pgd"] = {"steps": 40, "restarts": 2}
+            kwargs["vmi_fgsm"] = {"steps": 20, "num_variance_samples": 10}
+            kwargs["apgd_ce"] = {"steps": 50, "restarts": 2}
+            kwargs["apgd_dlr"] = {"steps": 50, "restarts": 2}
+            kwargs["square_attack"] = {"max_queries": 500}
+            kwargs["autoattack"] = {"version": "standard", "apgd_steps": 50, "square_queries": 500}
             rationale = (
                 "Top-conference publication grade: combines quick baseline (FGSM), restarted smart search (PGD/APGD-CE), "
                 "anti-gradient-masking checks (APGD-DLR + blind Square Attack), and the full AutoAttack ensemble alongside Carlini false-robustness checks."
@@ -467,7 +483,7 @@ def _estimate_attack_work_units(attack_id: str, kw: dict[str, Any]) -> tuple[flo
     return steps, steps * 0.5
 
 
-_SERIAL_SAMPLE_ATTACKS = frozenset({"deepfool", "sparsefool", "fab", "boundary", "hopskipjump"})
+_SERIAL_SAMPLE_ATTACKS = frozenset({"deepfool", "sparsefool", "boundary", "hopskipjump"})
 _PERTURB_BATCH_ATTACKS = frozenset({"nes", "spsa", "zoo"})
 
 
@@ -530,7 +546,7 @@ def _estimate_attack_seconds(
 
 def estimate_runtime(
     model_or_fn: Callable[[torch.Tensor], torch.Tensor],
-    x_sample: torch.Tensor,
+    x_sample: torch.Tensor | Iterable[tuple[torch.Tensor, torch.Tensor]],
     attacks: Sequence[str] | RecommendedSuite,
     *,
     num_samples: int = 100,
@@ -547,9 +563,14 @@ def estimate_runtime(
         attack_list = list(attacks)
         merged_kwargs = dict(attack_kwargs or {})
 
-    probe_bs = min(x_sample.shape[0], 16)
-    x_probe = x_sample[:probe_bs].detach()
-    dev = x_probe.device
+    if isinstance(x_sample, torch.Tensor):
+        dev = infer_model_device(model_or_fn, x_sample.device)
+        probe_bs = min(x_sample.shape[0], 16)
+        x_probe = x_sample[:probe_bs].detach().to(dev)
+    else:
+        dev = infer_model_device(model_or_fn, torch.device("cpu"))
+        x_probe, _ = materialize_eval_tensors(x_sample, max_samples=16, device=dev)
+        probe_bs = int(x_probe.shape[0])
 
     # Preserve caller gradient state on parameters before timing.
     saved_grads: list[torch.Tensor | None] = []

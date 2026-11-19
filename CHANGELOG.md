@@ -2,6 +2,26 @@
 
 All notable changes to `wannado-adv` will be documented in this file.
 
+## [1.2.2] - 2026-11-19
+
+### Fixed
+- **Complex64 Randomized Smoothing L2 Certification Soundness (`defenses/randomized_smoothing_cohen2019.py`)**: Scaled effective per-component noise $\sigma_{\mathrm{eff}} = \sigma / \sqrt{2}$ when certifying `torch.complex64`/`complex128` inputs (eliminating $\sqrt{2}$ overstatement of certified L2 radii), added `infer_model_device` alignment, and added optional Cohen Algorithm 2 two-sided binomial ABSTAIN (`alpha`) in `smooth_predict()`.
+- **Binary DLR (`num_classes < 3`) Zero Gradient (`core/losses.py`)**: Detached the `(z_0 - z_1)` normalization denominator in binary DLR loss so binary classifiers receive exact non-zero gradients instead of exact algebraic cancellation.
+- **Defense Training Streaming & Regularization (`defenses/{pgd_at,trades,mart,randomized_smoothing}`)**: Replaced eager `list(iter_eval_batches(..., device=dev))` full-dataset GPU staging with O(`batch_size`) streaming `iter_train_batches()`, added epoch shuffling for Tensor inputs, explicit error on exhausted one-shot generators, `(B, 1)` target squeezing, cosine LR scheduling (`lr_scheduler="cosine"`), and best-checkpoint restoration (`save_best=True`).
+- **Attack Correctness & Hygiene**:
+  - `boundary`: Fixed 1D binary search mutating `adv_cur` in-place while interpolating against it (`adv_start = adv_cur.clone()`).
+  - `cw_l2` & `ead` & `hopskipjump`: Eliminated victim parameter `.grad` pollution in `cw_l2` via `torch.autograd.grad(..., only_inputs=True)` and computed `success_rate` strictly *after* `eps` budget reversion.
+  - `fab`: Added explicit `norm` validation (rejecting unsupported `"l1"`), fixed Croce & Hein Alg. 1 direct backward contraction `(1 - beta) * x_orig + beta * x_curr`, and fixed `(B, 1)` targets.
+  - `apgd_l1`, `square_attack`, `autoattack`, `bpda_eot`, `gap`, `advgan`: Fixed list/tensor `clip_bounds` in `apgd_l1`, `(B, 1)` target broadcasting across attacks, chunked `autoattack` `apgd_t` stage monotonicity, `defense_fn` `eval_mode()` in `bpda_eot`, deterministic complex seeding in `gap`, and pre-step `best_state` snapshotting in `gap`/`advgan`.
+- **Carlini 2.0, `auto_red_team`, `verify_gate`, Co-Pilot & Reporting**:
+  - Added gradient-free sparse L1 black-box obfuscation probe (`_l1_blackbox_probe_acc`) and scale-invariant relative stochasticity + flip-rate detection in `audit_robustness()`, plus `ImageNet` L2 `eps_scale_meaningful` calibration.
+  - Added automatic CPU-tensor-to-model-device alignment (`infer_model_device`), lazy O(`batch_size`) streaming for deterministic `DataLoader`s (`make_reiterable_eval_batches`), Monte Carlo majority voting (`mc_draws=5`) for stochastic models, and curve `loss`/`l1` override propagation in `auto_red_team()` and `evaluate_suite()`.
+  - Made `verify_robustness_gate` honor `samples` on Tensor inputs and flag `carlini:hard_label_only_unverifiable_whitebox` instead of silently passing `carlini_audit_ok` on hard-label-only oracles.
+  - Fixed `recommend_suite(..., norm="l1")` (native L1 attacks only), added `DataLoader` support to `preflight`, `probe_model_context`, `estimate_runtime`, and scaffolded `run_eval.py`, fixed continuous `format_paper_summary()` budget sweep rendering, and preserved float outputs for continuous regressors in `SklearnModelAdapter`.
+
+### Added
+- **`NormalizedModelWrapper` / `wrap_normalized_model` (`wannado.adv.core.utils`)**: Differentiable `(x - mean) / std` wrapper exported at top level so pretrained `[0, 1]` ImageNet/CIFAR/tabular models keep exact gradients without manual wrapper boilerplate.
+
 ## [1.2.1] - 2026-11-19
 
 ### Fixed

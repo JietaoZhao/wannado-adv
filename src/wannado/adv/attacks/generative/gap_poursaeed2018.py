@@ -263,13 +263,18 @@ def gap(
 
     # [AI-Prompt Hook]: Swap `_ShapeAdaptivePerturbGenerator` by passing `generator=my_net`
     # expecting packed real channels `[real, imag]` for complex or native tensor shape for real inputs.
-    gen_net = (
-        generator
-        if generator is not None
-        else _ShapeAdaptivePerturbGenerator(tuple(x_clean.shape[1:]), x_clean.is_complex()).to(
+    if generator is not None:
+        gen_net = generator
+    elif seed is not None:
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(seed)
+            gen_net = _ShapeAdaptivePerturbGenerator(tuple(x_clean.shape[1:]), x_clean.is_complex()).to(
+                device=x_clean.device, dtype=real_dtype
+            )
+    else:
+        gen_net = _ShapeAdaptivePerturbGenerator(tuple(x_clean.shape[1:]), x_clean.is_complex()).to(
             device=x_clean.device, dtype=real_dtype
         )
-    )
     gen_net.train()
     optimizer = torch.optim.Adam(gen_net.parameters(), lr=lr)
 
@@ -281,7 +286,13 @@ def gap(
             generator=rng,
         )
         if x_clean.is_complex():
-            latent_z = torch.complex(latent_z, torch.randn_like(latent_z)).to(x_clean.dtype)
+            latent_im = torch.randn(
+                (1, *x_clean.shape[1:]),
+                device=x_clean.device,
+                dtype=real_dtype,
+                generator=rng,
+            )
+            latent_z = torch.complex(latent_z, latent_im).to(x_clean.dtype)
         latent_z_packed = _pack_to_real(latent_z)
         univ_budget = eps_budget.amin(dim=0, keepdim=True)
     else:
@@ -306,16 +317,16 @@ def gap(
             obj = compute_attack_objective(
                 model_or_fn, x_adv_train, y, loss_fn, targeted=targeted
             )
+            cur_obj = float(obj.mean().item())
+            if cur_obj > best_obj_mean:
+                best_obj_mean = cur_obj
+                best_state = {k: v.detach().clone() for k, v in gen_net.state_dict().items()}
+
             train_loss = -obj.mean()
             train_loss.backward()
             torch.nn.utils.clip_grad_norm_(gen_net.parameters(), 1.0)
             optimizer.step()
-
-            cur_obj = float(obj.mean().item())
             loss_history.append(float(train_loss.item()))
-            if cur_obj > best_obj_mean:
-                best_obj_mean = cur_obj
-                best_state = {k: v.detach().clone() for k, v in gen_net.state_dict().items()}
 
     gen_net.load_state_dict(best_state)
     gen_net.eval()

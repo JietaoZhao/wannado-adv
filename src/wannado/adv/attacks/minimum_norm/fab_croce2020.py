@@ -306,10 +306,11 @@ def _fab_batched(
             alpha = torch.clamp(n1 / (n1 + n2 + 1e-12), max=alpha_max).view(view_shape)
 
             x_forward = (1.0 - alpha) * (x_curr + eta * d_curr) + alpha * (x_orig + eta * d_orig)
-            x_contract = (1.0 - beta) * x_orig + beta * x_forward
+            # Croce & Hein (ICML 2020) Alg. 1: already-fooled iterates contract directly toward x_orig.
+            x_contract = (1.0 - beta) * x_orig + beta * x_curr
             x_next = torch.where(is_fooled.view(view_shape), x_contract, x_forward)
             x_next = clamp_to_bounds(x_next, clip_bounds)
-            x_curr = torch.where(valid_step.view(view_shape), x_next, x_curr)
+            x_curr = torch.where(valid_step.view(view_shape) | is_fooled.view(view_shape), x_next, x_curr)
 
         with torch.no_grad():
             preds_end = predict_labels(model_or_fn(x_curr))
@@ -373,6 +374,12 @@ def fab(
     if targeted and y is None:
         raise ValueError("y (target labels) must be provided when targeted=True.")
 
+    if norm not in ("linf", "l2", "relative_l2", "jsr_db"):
+        raise ValueError(
+            f"fab supports norm in ('linf', 'l2', 'relative_l2', 'jsr_db'), got '{norm}'. "
+            "For L1 minimum-norm/sparse attacks use 'ead', 'apgd_l1', or 'sparsefool'."
+        )
+
     t0 = time.perf_counter()
     x_clean = x.detach()
     n_total = x_clean.shape[0]
@@ -389,7 +396,10 @@ def fab(
         for start in range(0, n_total, chunk):
             end = min(start + chunk, n_total)
             xb = x_clean[start:end]
-            yb = y[start:end].to(device=x_clean.device, dtype=torch.long) if y is not None else None
+            yb: torch.Tensor | None = None
+            if y is not None:
+                yb_raw = y[start:end].to(device=x_clean.device, dtype=torch.long)
+                yb = yb_raw.squeeze(1) if yb_raw.ndim == 2 and yb_raw.shape[1] == 1 else yb_raw
 
             with torch.no_grad():
                 clean_preds = predict_labels(model_or_fn(xb))

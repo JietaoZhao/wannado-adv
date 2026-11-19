@@ -153,7 +153,10 @@ def boundary(
     with eval_mode(model_or_fn), torch.no_grad():
         clean_preds, q = _hard_decisions(model_or_fn, x_clean)
         queries += q
-        ref_y = y.to(torch.long) if y is not None else clean_preds
+        if y is not None:
+            ref_y = (y.squeeze(1) if y.ndim == 2 and y.shape[1] == 1 else y).to(torch.long)
+        else:
+            ref_y = clean_preds
 
         x_adv = x_clean.clone()
 
@@ -226,13 +229,14 @@ def boundary(
             if adv_cur is None:
                 continue
 
-            # Binary search along segment [x_i, adv_cur] to land tightly on the boundary.
+            # Binary search along fixed segment [x_i, adv_start] to land tightly on the boundary.
+            adv_start = adv_cur.clone()
             lo_b, hi_b = 0.0, 1.0
             for _ in range(10):
                 if max_queries is not None and queries >= max_queries:
                     break
                 mid_b = 0.5 * (lo_b + hi_b)
-                mid_x = (1.0 - mid_b) * x_i + mid_b * adv_cur
+                mid_x = (1.0 - mid_b) * x_i + mid_b * adv_start
                 p, q = _hard_decisions(model_or_fn, mid_x)
                 queries += q
                 if _is_adv(p, label_i, targeted).item():

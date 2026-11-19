@@ -154,7 +154,7 @@ def verify_robustness_gate(
         surrogate_fn=surrogate_fn,
         goal=goal,
         batch_size=batch_size,
-        max_samples=samples if not isinstance(x, torch.Tensor) else None,
+        max_samples=samples,
         sweep_curve=sweep_curve,
         seed=seed,
         domain=domain,
@@ -190,6 +190,12 @@ def verify_robustness_gate(
             red_flags.extend(f"carlini:{rf}" for rf in rt.audit.red_flags)
         else:
             warnings.extend(f"carlini:{rf}" for rf in rt.audit.red_flags)
+    elif rt.audit is None and "hard_label_only" in rt.detected_defenses:
+        audit_ok = False
+        if fail_on_red_flag:
+            red_flags.append("carlini:hard_label_only_unverifiable_whitebox")
+        else:
+            warnings.append("carlini:hard_label_only_unverifiable_whitebox")
     checks["carlini_audit_ok"] = audit_ok if fail_on_red_flag else True
 
     if min_clean_acc is not None and rt.clean_acc is not None:

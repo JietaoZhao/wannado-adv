@@ -10,7 +10,7 @@ import ast
 import os
 import re
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -19,6 +19,7 @@ import torch
 
 from wannado.adv.audit.preflight import preflight
 from wannado.adv.core.losses import unwrap_model_outputs
+from wannado.adv.core.utils import infer_model_device, materialize_eval_tensors
 
 _IGNORE_DIRS = {
     ".git",
@@ -471,75 +472,85 @@ def scan_project(project_dir: str | Path = ".", max_files: int = 200) -> Project
 
 def probe_model_context(
     model_or_fn: Callable[[torch.Tensor], torch.Tensor],
-    x: torch.Tensor,
+    x: torch.Tensor | Iterable[tuple[torch.Tensor, torch.Tensor]],
     y: torch.Tensor | None = None,
     *,
     norm: str | None = None,
     eps: float | None = None,
     clip_bounds: tuple[Any, Any] | None = None,
 ) -> ModelContextProbe:
-    """Inspect a live model and sample batch to infer domain, range, norms, and autograd status."""
-    is_complex = bool(x.is_complex())
+    """Inspect a live model and sample batch (or DataLoader) to infer domain, range, norms, and autograd status."""
+    fallback_dev = x.device if isinstance(x, torch.Tensor) else torch.device("cpu")
+    dev = infer_model_device(model_or_fn, fallback_dev)
+    if isinstance(x, torch.Tensor):
+        x_probe = x.detach()[: min(x.shape[0], 16)].to(dev)
+        y_probe = y.detach()[: x_probe.shape[0]].to(dev) if y is not None else None
+        full_shape = list(x.shape)
+    else:
+        x_probe, y_probe = materialize_eval_tensors(x, max_samples=16, device=dev)
+        full_shape = list(x_probe.shape)
+
+    is_complex = bool(x_probe.is_complex())
     if norm is None:
-        norm = "jsr_db" if is_complex else ("linf" if x.ndim == 4 else "l2")
+        norm = "jsr_db" if is_complex else ("linf" if x_probe.ndim == 4 else "l2")
     if eps is None:
-        eps = -10.0 if norm == "jsr_db" else (8.0 / 255.0 if (norm == "linf" and x.ndim == 4) else 0.1)
+        eps = -10.0 if norm == "jsr_db" else (8.0 / 255.0 if (norm == "linf" and x_probe.ndim == 4) else 0.1)
 
     x_min: float | None = None
     x_max: float | None = None
     inferred_bounds = clip_bounds
     if not is_complex:
-        x_det = x.detach()
+        x_det = x_probe.detach()
         if bool(torch.isfinite(x_det).all()):
             x_min = float(x_det.min().item())
             x_max = float(x_det.max().item())
-            if inferred_bounds is None and 0.0 <= x_min and x_max <= 1.0 and x.ndim == 4:
+            if inferred_bounds is None and 0.0 <= x_min and x_max <= 1.0 and x_probe.ndim == 4:
                 inferred_bounds = (0.0, 1.0)
 
-    loss_probe = "ce" if y is not None and y.dtype in (torch.int64, torch.int32, torch.long) else "mse"
+    loss_probe = "ce" if y_probe is not None and y_probe.dtype in (torch.int64, torch.int32, torch.long) else "mse"
     pf = preflight(
         model_or_fn,
-        x,
-        y,
+        x_probe,
+        y_probe,
         eps=eps,
         norm=norm,
         clip_bounds=inferred_bounds,
         loss=loss_probe,
         check_gradients=True,
-        probe_batch_size=min(x.shape[0], 8),
+        probe_batch_size=min(x_probe.shape[0], 8),
     )
     grad_info = pf.summary.get("gradient_probe", {})
     out_shape = grad_info.get("outputs_shape")
     if out_shape is None and callable(model_or_fn):
         try:
             with torch.no_grad():
-                out = unwrap_model_outputs(model_or_fn(x[: min(2, x.shape[0])].detach()))
+                out = unwrap_model_outputs(model_or_fn(x_probe[: min(2, x_probe.shape[0])].detach()))
             out_shape = list(out.shape)
         except Exception:  # noqa: BLE001
             out_shape = None
 
     if is_complex:
         inferred_domain = "wireless"
-    elif x.ndim == 4:
+    elif x_probe.ndim == 4:
         inferred_domain = "vision"
-    elif x.ndim == 3:
+    elif x_probe.ndim == 3:
         inferred_domain = "timeseries"
     else:
         inferred_domain = "tabular"
 
-    is_cls_y = y is not None and y.dtype in (torch.int64, torch.int32, torch.long)
+    is_cls_y = y_probe is not None and y_probe.dtype in (torch.int64, torch.int32, torch.long)
     if out_shape is not None and (len(out_shape) >= 2 or len(out_shape) == 1) and is_cls_y:
         task_kind = "classification"
-    elif out_shape is not None and len(out_shape) >= 2 and y is None:
+    elif out_shape is not None and len(out_shape) >= 2 and y_probe is None:
         task_kind = "classification_or_policy"
     else:
         task_kind = "regression_or_latent"
 
     return ModelContextProbe(
-        device=str(x.device),
-        dtype=str(x.dtype),
+        device=str(x_probe.device),
+        dtype=str(x_probe.dtype),
         is_complex=is_complex,
-        input_shape=list(x.shape),
+        input_shape=full_shape,
         input_min=x_min,
         input_max=x_max,
         output_shape=out_shape,

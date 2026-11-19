@@ -27,7 +27,7 @@ from torch import nn
 from wannado.adv.attacks.first_order.pgd_madry2018 import pgd
 from wannado.adv.core.losses import normalize_classification_logits, predict_labels
 from wannado.adv.core.types import AttackCitation
-from wannado.adv.core.utils import eval_mode, iter_eval_batches
+from wannado.adv.core.utils import eval_mode, iter_train_batches, make_generator, squeeze_class_targets
 from wannado.adv.defenses.types import DefenseMeta, DefenseTrainResult
 
 META = DefenseMeta(
@@ -79,6 +79,9 @@ def pgd_adversarial_train(
     clip_bounds: tuple[Any, Any] | None = None,
     eval_data: tuple[torch.Tensor, torch.Tensor] | None = None,
     optimizer: torch.optim.Optimizer | None = None,
+    shuffle: bool = True,
+    lr_scheduler: str | None = None,
+    save_best: bool = False,
     seed: int = 42,
 ) -> DefenseTrainResult:
     """Harden a PyTorch classifier via Madry et al. (ICLR 2018) min-max PGD Adversarial Training."""
@@ -89,14 +92,19 @@ def pgd_adversarial_train(
 
     dev = next((p.device for p in model.parameters()), torch.device("cpu"))
     opt = optimizer if optimizer is not None else torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(epochs, 1)) if lr_scheduler == "cosine" else None
+    shuf_gen = make_generator(seed, train_data.device) if isinstance(train_data, torch.Tensor) else None
 
     history: list[dict[str, float]] = []
+    best_metric = float("-inf")
+    best_state: dict[str, torch.Tensor] | None = None
     for ep in range(epochs):
-        batches = list(iter_eval_batches(train_data, y, batch_size=batch_size, device=dev))
         ep_loss = 0.0
         n_seen = 0
-        for b_idx, (xb, yb) in enumerate(batches):
-            yb_l = yb.to(torch.long)
+        for b_idx, (xb, yb) in enumerate(
+            iter_train_batches(train_data, y, batch_size=batch_size, device=dev, shuffle=shuffle, generator=shuf_gen)
+        ):
+            yb_l = squeeze_class_targets(yb, batch_size=xb.shape[0])
             with eval_mode(model):
                 adv_res = pgd(
                     model,
@@ -122,10 +130,13 @@ def pgd_adversarial_train(
             bs = int(xb.shape[0])
             ep_loss += float(loss.item()) * bs
             n_seen += bs
+        if sched is not None:
+            sched.step()
 
         rec: dict[str, float] = {"epoch": float(ep + 1), "train_adv_loss": ep_loss / max(n_seen, 1)}
         if eval_data is not None:
-            xe, ye = eval_data[0].to(dev), eval_data[1].to(dev, dtype=torch.long)
+            xe = eval_data[0].to(dev)
+            ye = squeeze_class_targets(eval_data[1].to(dev), batch_size=xe.shape[0])
             with eval_mode(model):
                 with torch.no_grad():
                     rec["eval_clean_acc"] = float((predict_labels(model(xe)) == ye).float().mean().item())
@@ -134,7 +145,13 @@ def pgd_adversarial_train(
                 ).x_adv
                 with torch.no_grad():
                     rec["eval_adv_acc"] = float((predict_labels(model(xe_adv)) == ye).float().mean().item())
+            if save_best and rec["eval_adv_acc"] >= best_metric:
+                best_metric = rec["eval_adv_acc"]
+                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
         history.append(rec)
+
+    if save_best and best_state is not None:
+        model.load_state_dict({k: v.to(dev) for k, v in best_state.items()})
 
     model.eval()
     final_clean = history[-1].get("eval_clean_acc") if history else None

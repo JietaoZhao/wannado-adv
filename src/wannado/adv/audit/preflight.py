@@ -7,7 +7,7 @@ without mutating caller model state or parameter gradients.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -145,7 +145,7 @@ def _probe_gradients(
             torch.long,
         )
         effective_loss_name = loss_name
-        if y_probe is not None and not is_cls_target and loss_name in (None, "ce", "margin", "dlr"):
+        if y_probe is not None and not is_cls_target and loss_name in (None, "ce", "margin", "dlr", "mse"):
             effective_loss_name = "mse" if outputs.shape == y_probe.shape else None
 
         result["probe_loss_used"] = effective_loss_name or ("l2_output" if y_probe is None or not is_cls_target else "ce")
@@ -197,7 +197,7 @@ def _probe_gradients(
 
 def preflight(
     model_or_fn: Callable[[torch.Tensor], torch.Tensor],
-    x: torch.Tensor,
+    x: torch.Tensor | Iterable[tuple[torch.Tensor, torch.Tensor]],
     y: torch.Tensor | None = None,
     *,
     eps: float = 0.03,
@@ -214,7 +214,7 @@ def preflight(
 
     Args:
         model_or_fn: Victim ``nn.Module`` or callable mapping ``x -> outputs``.
-        x: Clean sample batch (real or complex tensor, shape ``(B, ...)``).
+        x: Clean sample batch (real or complex tensor, shape ``(B, ...)``) or a PyTorch ``DataLoader``.
         y: Optional ground-truth labels/targets corresponding to ``x``.
         eps: Intended perturbation budget (or JSR in dB when ``norm="jsr_db"``).
         norm: Target geometry: ``"linf"``, ``"l2"``, ``"relative_l2"``, or ``"jsr_db"``.
@@ -228,16 +228,26 @@ def preflight(
     Returns:
         ``PreflightReport`` containing ``ok``, ``warnings``, ``errors``, ``recommendations``, and ``summary``.
     """
+    from wannado.adv.core.utils import DefendedModelWrapper, infer_model_device, materialize_eval_tensors
+
     warnings: list[str] = []
     errors: list[str] = []
     recommendations: list[str] = []
+
+    if not isinstance(x, torch.Tensor):
+        target_dev = infer_model_device(model_or_fn, torch.device("cpu"))
+        x, y = materialize_eval_tensors(x, y, max_samples=max(probe_batch_size, 16), device=target_dev)
+    else:
+        target_dev = infer_model_device(model_or_fn, x.device)
+        if x.device != target_dev:
+            x = x.to(target_dev)
+            if y is not None:
+                y = y.to(target_dev)
 
     module_info = _inspect_module(model_or_fn)
     module_info["has_defense_fn"] = defense_fn is not None
     effective_model: Callable[[torch.Tensor], torch.Tensor] = model_or_fn
     if defense_fn is not None:
-        from wannado.adv.core.utils import DefendedModelWrapper
-
         effective_model = DefendedModelWrapper(model_or_fn, defense_fn)
     summary: dict[str, Any] = {
         "model": module_info,

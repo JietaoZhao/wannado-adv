@@ -189,7 +189,7 @@ def bpda_eot(
         (x_clean.shape[0],), float("-inf"), device=x_clean.device, dtype=eps_budget.dtype
     )
 
-    with eval_mode(model_or_fn):
+    with eval_mode(model_or_fn), eval_mode(defense_fn) if defense_fn is not None else eval_mode(lambda z: z):
         for _ in range(restarts):
             if random_start:
                 delta = random_init_perturbation(

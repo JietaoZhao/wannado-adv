@@ -1,8 +1,8 @@
 # WannaDo Series: Autonomous AI Red-Teaming, Hardening & Certification Platform — `wannado-adv`
 
-> Part of the **WannaDo** human–AI collaborative scientific research platform · **Release `v1.2.1`**
+> Part of the **WannaDo** human–AI collaborative scientific research platform · **Release `v1.2.2`**
 
-[![Version](https://img.shields.io/badge/version-1.2.1-2563eb)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-1.2.2-2563eb)](pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-0f766e)](pyproject.toml)
 [![Attacks](https://img.shields.io/badge/attacks-35%20single--file-059669)](#quick-usage-python--cli)
 [![Defenses](https://img.shields.io/badge/defenses-4%20single--file%20%2B%20L2%20cert-7c3aed)](#quick-usage-python--cli)
@@ -58,7 +58,7 @@ This writes `AGENTS.md` + `.agents/skills/wannado-adv/SKILL.md` plus discovery a
 
 1. **Inspect & Probe**: Runs `wannado-adv inspect .` (`scan_project` + `probe_model_context`) to infer domain, tensor dtype (`float32` vs `torch.complex64`), bounds, checkpoints, and gradient health.
 2. **Isolate Boundary**: Scaffolds `./adv_eval/interface.py` (`wannado-adv scaffold`) wrapping your model, optional `defense_fn` / `surrogate_fn`, and `DataLoader` cleanly without modifying training scripts.
-3. **One-Click Red-Team & Verify Gate**: Executes `wannado-adv verify --interface ./adv_eval/interface.py --goal standard` (`auto_red_team()` + Carlini 2.0), automatically bypassing fake defenses and exporting `red_team_report.json`, `paper_summary.md`, `paper_table.tex`, `references.bib`, `robustness_curve.csv`, and `robustness_curve.png`.
+3. **One-Click Red-Team & Verify Gate**: Executes `wannado-adv verify --interface ./adv_eval/interface.py --goal standard` (`auto_red_team()` + Carlini 2.0), automatically bypassing fake defenses and exporting `red_team_report.json`, `red_team_summary.md`, `paper_table.tex`, `references.bib`, `robustness_curve.csv`, and `robustness_curve.png`.
 4. **Closed-Loop Hardening & Carlini 2.0 Re-Audit**: If the gate fails, hardens with `trades_train` / `pgd_adversarial_train` / `mart_train` (or certifies L2 radii via `certify_randomized_smoothing`), then immediately re-runs `wannado-adv verify` to confirm genuine robustness (`passed=True`).
 
 ## Quick Usage (Python & CLI)
@@ -82,7 +82,7 @@ rt_after = auto_red_team(model, test_loader, eps=8/255, norm="linf", clip_bounds
 
 # 3. Provable L2 certification via Randomized Smoothing (pure Python — zero SciPy)
 gaussian_augmented_train(model, train_loader, sigma=0.25, clip_bounds=(0.0, 1.0))
-cert = certify_randomized_smoothing(model, x_test, y_test, sigma=0.25, n0=100, n=1000, alpha=0.001)
+cert = certify_randomized_smoothing(model, x_test, y_test, sigma=0.25, n0=100, n=1000, alpha=0.001, clip_bounds=(0.0, 1.0))
 
 # 4. Native torch.complex64 wireless baseband jamming under Jamming-to-Signal Ratio (-10 dB)
 res_rf = pgd(wireless_rx, iq_signal, mod_labels, eps=-10.0, norm="jsr_db", steps=20)
@@ -124,7 +124,7 @@ End-to-end validation scripts live under [`benchmarks/`](https://github.com/Jiet
 ### 2. Vision Parity (`RobustBench` / `torchattacks` / Official `AutoAttack`) & False-Robustness Audit
 
 - **MPS Compatibility**: `26/26` representative Wave 1+2 attacks pass natively on Apple Silicon `mps`.
-- **CIFAR-10 Parity (`eps=8/255`, `N=200`)**: Matches `torchattacks` & official `fra31/auto-attack` on `Standard` (Clean `94.5%`, `PGD-10`/`MI`/`NI`/`DI`/`APGD` -> `0.0%`, `AutoAttack` `0.0%` in `19.43s` vs `22.10s`) and matches/tightens `Wong2020Fast` (Clean `86.0%`, `FGSM 53.0%`, `PGD-10 46.0%`, `NI-FGSM 47.5% vs 51.0%`, `Square-500q 63.0% vs 65.5%`, `AutoAttack 42.0% vs 43.0%`).
+- **CIFAR-10 Parity (`eps=8/255`, `N=200`)**: Matches `torchattacks` & official `fra31/auto-attack` on `Standard` (Clean `94.5%`, `PGD-10`/`MI`/`NI`/`DI`/`APGD` -> `0.0%`, `AutoAttack` `0.0%` in `19.43s` vs `22.10s`) and aligns on `Wong2020Fast` (Clean `86.0%`, `FGSM 53.0%`, `PGD-10 46.0%`, `NI-FGSM 47.5% vs 51.0%`, `Square-500q 63.0% vs 65.5%`, `AutoAttack 42.0%` [5-stage including untargeted APGD-DLR] vs `43.0%` [official 4-stage]).
 - **Carlini Trap Detection**: `audit_robustness()` automatically flags `softmax_saturation_masking` on logit-rescaled models (`10^3 x logits`: naive `PGD-CE` fooled at `85.0%`, bypassed by `apgd_dlr` at `49.0%`) and `broken_or_vanishing_gradients` on non-differentiable 4-bit input quantization (`torchattacks PGD` stalled at `85.0%`, bypassed by `bpda_eot` at `45.5%`).
 
 ![CIFAR-10 RobustBench Alignment and Carlini Audit](https://raw.githubusercontent.com/JietaoZhao/wannado-adv/main/benchmarks/assets/cv_alignment_and_audit.png)

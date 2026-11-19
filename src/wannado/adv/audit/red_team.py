@@ -25,14 +25,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
-from torch import nn
 
 from wannado.adv.audit.carlini_auditor import AuditReport, audit_robustness
 from wannado.adv.audit.preflight import PreflightReport, preflight
 from wannado.adv.catalog.build_catalog import load_catalog
 from wannado.adv.core.losses import predict_labels, unwrap_model_outputs
 from wannado.adv.core.projections import compute_perturbation_norm, safe_l2_norm
-from wannado.adv.core.utils import DefendedModelWrapper, eval_mode, iter_eval_batches
+from wannado.adv.core.utils import (
+    DefendedModelWrapper,
+    eval_mode,
+    infer_model_device,
+    make_reiterable_eval_batches,
+)
 
 if TYPE_CHECKING:
     from wannado.adv.reporter.paper_reporter import AttackRunRecord, EvaluationReport
@@ -421,6 +425,22 @@ def _build_adaptive_escalation_plan(
     return plan
 
 
+def _eval_preds_mc(
+    victim: Callable[[torch.Tensor], torch.Tensor],
+    xb: torch.Tensor,
+    mc_draws: int = 1,
+) -> torch.Tensor:
+    """Predict labels with optional Monte Carlo majority voting for stochastic defenses."""
+    p0 = predict_labels(unwrap_model_outputs(victim(xb)))
+    if mc_draws <= 1:
+        return p0
+    draws = [p0]
+    for _ in range(mc_draws - 1):
+        draws.append(predict_labels(unwrap_model_outputs(victim(xb))))
+    stacked = torch.stack(draws, dim=0)
+    return torch.mode(stacked.cpu(), dim=0).values.to(p0.device)
+
+
 def auto_red_team(
     model_or_fn: Callable[[torch.Tensor], torch.Tensor],
     x: torch.Tensor | Iterable[tuple[torch.Tensor, torch.Tensor]],
@@ -457,26 +477,24 @@ def auto_red_team(
         raise ValueError(f"goal must be 'sanity', 'standard', or 'paper_sota', got '{goal}'.")
 
     t_start = time.perf_counter()
-    from_loader = not isinstance(x, torch.Tensor)
-    raw_batches = list(iter_eval_batches(x, y, batch_size=batch_size, max_samples=max_samples))
-    if not raw_batches:
+    batch_iter = make_reiterable_eval_batches(x, y, batch_size=batch_size, max_samples=max_samples)
+    first_x: torch.Tensor | None = None
+    for xb_raw, _yb_raw in batch_iter():
+        first_x = xb_raw
+        break
+    if first_x is None:
         raise ValueError("Evaluation input yielded zero samples.")
 
-    first_x, _first_y = raw_batches[0]
-    eval_device = first_x.device
-    if from_loader and isinstance(model_or_fn, nn.Module):
-        for p in model_or_fn.parameters():
-            eval_device = p.device
-            break
+    eval_device = infer_model_device(model_or_fn, first_x.device)
 
     is_complex = bool(first_x.is_complex())
     resolved_domain = domain or ("wireless" if is_complex else ("vision" if first_x.ndim == 4 else "tabular"))
     deployed_victim: Callable[[torch.Tensor], torch.Tensor] = (
         DefendedModelWrapper(model_or_fn, defense_fn) if defense_fn is not None else model_or_fn
     )
-    total_n = sum(int(xb.shape[0]) for xb, _ in raw_batches)
+    total_n = 0
 
-    # 1. Clean pass across all chunks
+    # 1. Clean pass across all chunks (streaming in O(batch_size) memory)
     is_classification = False
     is_hard_label_only = False
     clean_correct_chunks: list[torch.Tensor] = []
@@ -485,7 +503,8 @@ def auto_red_team(
     clean_mse_applicable = True
 
     with eval_mode(deployed_victim), torch.no_grad():
-        for b_idx, (xb_raw, yb_raw) in enumerate(raw_batches):
+        for b_idx, (xb_raw, yb_raw) in enumerate(batch_iter()):
+            total_n += int(xb_raw.shape[0])
             xb = xb_raw.to(eval_device)
             yb = yb_raw.to(eval_device)
             out = unwrap_model_outputs(deployed_victim(xb))
@@ -517,7 +536,7 @@ def auto_red_team(
     ax_list: list[torch.Tensor] = []
     ay_list: list[torch.Tensor] = []
     collected = 0
-    for xb_raw, yb_raw in raw_batches:
+    for xb_raw, yb_raw in batch_iter():
         take = min(xb_raw.shape[0], k_audit - collected)
         if take <= 0:
             break
@@ -593,6 +612,22 @@ def auto_red_team(
             flush=True,
         )
 
+    eval_mc_draws = 5 if "stochastic_randomization" in detected_defenses else 1
+    if is_classification and eval_mc_draws > 1:
+        # Stabilize clean baseline via MC majority voting so clean vs adversarial evals are apples-to-apples.
+        mc_clean_chunks: list[torch.Tensor] = []
+        with eval_mode(deployed_victim), torch.no_grad():
+            for xb_raw, yb_raw in batch_iter():
+                xb = xb_raw.to(eval_device)
+                yb = yb_raw.to(eval_device)
+                c_preds = _eval_preds_mc(deployed_victim, xb, mc_draws=eval_mc_draws)
+                y_cmp = yb.squeeze(1) if c_preds.ndim == 1 and yb.ndim == 2 and yb.shape[1] == 1 else yb
+                mc_clean_chunks.append((c_preds == y_cmp).detach().cpu())
+        clean_correct_all = torch.cat(mc_clean_chunks, dim=0)
+        clean_correct_count = int(clean_correct_all.sum().item())
+        clean_acc = clean_correct_count / max(total_n, 1)
+        clean_ci_95 = wilson_ci(clean_correct_count, total_n)
+
     # 3. Execute escalation plan while tracking per-sample ensemble survival
     by_id = {c["id"]: c for c in load_catalog()}
     tol = 1e-2 if norm == "jsr_db" else max(1e-4, abs(eps) * 1e-3)
@@ -630,7 +665,7 @@ def auto_red_team(
             cos_sum = 0.0
             last_extra: dict[str, Any] = {"escalation_reason": step_spec["reason"]}
 
-            for b_idx, (xb_raw, yb_raw) in enumerate(raw_batches):
+            for b_idx, (xb_raw, yb_raw) in enumerate(batch_iter()):
                 xb = xb_raw.to(eval_device)
                 yb = yb_raw.to(eval_device)
                 ck = dict(call_kwargs)
@@ -652,12 +687,12 @@ def auto_red_team(
                     last_extra.update(res.extra)
 
                 with eval_mode(deployed_victim), torch.no_grad():
-                    adv_out = unwrap_model_outputs(deployed_victim(res.x_adv))
                     if is_classification:
-                        adv_preds = predict_labels(adv_out)
+                        adv_preds = _eval_preds_mc(deployed_victim, res.x_adv, mc_draws=eval_mc_draws)
                         y_cmp = yb.squeeze(1) if adv_preds.ndim == 1 and yb.ndim == 2 and yb.shape[1] == 1 else yb
                         adv_correct_chunks.append((adv_preds == y_cmp).detach().cpu())
                     else:
+                        adv_out = unwrap_model_outputs(deployed_victim(res.x_adv))
                         c_out_b = clean_outs_chunks[b_idx].to(eval_device)
                         diff_out = (adv_out - c_out_b).reshape(xb.shape[0], -1)
                         l2_drift_sum += float(safe_l2_norm(diff_out, dim=1).sum().item())
@@ -794,7 +829,7 @@ def auto_red_team(
         cx_list: list[torch.Tensor] = []
         cy_list: list[torch.Tensor] = []
         c_got = 0
-        for xb_raw, yb_raw in raw_batches:
+        for xb_raw, yb_raw in batch_iter():
             take = min(xb_raw.shape[0], k_curve - c_got)
             if take <= 0:
                 break
@@ -806,7 +841,10 @@ def auto_red_team(
 
         # Avoid nested full AutoAttack inside the 6-point curve; step down to its white-box driver if needed
         if curve_attack_id == "autoattack":
-            curve_attack_id = "apgd_dlr" if "broken_or_obfuscated_gradients" not in detected_defenses else "square_attack"
+            if norm == "l1":
+                curve_attack_id = "apgd_l1"
+            else:
+                curve_attack_id = "apgd_dlr" if "broken_or_obfuscated_gradients" not in detected_defenses else "square_attack"
 
         _, c_fn, _ = _resolve_attack_entry(curve_attack_id, by_id)
         c_sig = inspect.signature(c_fn)
@@ -814,6 +852,9 @@ def auto_red_team(
         c_victim = model_or_fn if c_uses_bpda else deployed_victim
 
         c_overrides: dict[str, Any] = {}
+        plan_by_id = {str(p["attack_id"]): dict(p["kwargs"]) for p in plan}
+        if "loss" in c_sig.parameters and "loss" in plan_by_id.get(curve_attack_id, {}):
+            c_overrides["loss"] = plan_by_id[curve_attack_id]["loss"]
         if c_uses_bpda:
             c_overrides["defense_fn"] = defense_fn
             if surrogate_fn is not None and "surrogate_fn" in c_sig.parameters:
@@ -830,13 +871,14 @@ def auto_red_team(
             c_overrides["loss"] = "mse"
 
         with eval_mode(deployed_victim), torch.no_grad():
-            c_clean_out = unwrap_model_outputs(deployed_victim(x_curve))
             if is_classification:
-                c_clean_preds = predict_labels(c_clean_out)
+                c_clean_preds = _eval_preds_mc(deployed_victim, x_curve, mc_draws=eval_mc_draws)
                 y_curve_cmp = y_curve.squeeze(1) if c_clean_preds.ndim == 1 and y_curve.ndim == 2 and y_curve.shape[1] == 1 else y_curve
                 c_clean_ok = c_clean_preds == y_curve_cmp
                 c_clean_cnt = int(c_clean_ok.sum().item())
+                c_clean_out = torch.empty(0, device=eval_device)
             else:
+                c_clean_out = unwrap_model_outputs(deployed_victim(x_curve))
                 c_clean_ok = None
                 c_clean_cnt = 0
 
@@ -857,9 +899,8 @@ def auto_red_team(
             try:
                 c_res = c_fn(c_victim, x_curve, y_curve, **ck_b) if "y" in c_sig.parameters else c_fn(c_victim, x_curve, **ck_b)
                 with eval_mode(deployed_victim), torch.no_grad():
-                    out_b = unwrap_model_outputs(deployed_victim(c_res.x_adv))
                     if is_classification and c_clean_ok is not None:
-                        preds_b = predict_labels(out_b)
+                        preds_b = _eval_preds_mc(deployed_victim, c_res.x_adv, mc_draws=eval_mc_draws)
                         ok_b = preds_b == y_curve_cmp
                         ok_cnt = int(ok_b.sum().item())
                         acc_b = float(ok_cnt / x_curve.shape[0])
@@ -867,6 +908,7 @@ def auto_red_team(
                         lo_b, hi_b = wilson_ci(ok_cnt, x_curve.shape[0])
                         curve_points.append({"eps": float(b_eps), "robust_acc": acc_b, "cond_asr": asr_b, "ci_low": lo_b, "ci_high": hi_b})
                     else:
+                        out_b = unwrap_model_outputs(deployed_victim(c_res.x_adv))
                         drift_b = float(safe_l2_norm((out_b - c_clean_out).reshape(x_curve.shape[0], -1), dim=1).mean().item())
                         mse_b = float(_per_sample_mse(out_b, y_curve).mean().item()) if clean_mse_applicable else 0.0
                         curve_points.append({"eps": float(b_eps), "adv_mse": mse_b, "output_l2_drift": drift_b})

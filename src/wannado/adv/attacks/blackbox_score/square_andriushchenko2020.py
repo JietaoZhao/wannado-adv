@@ -378,8 +378,10 @@ def square_attack(
 
         if can_check_class_stop and outputs_init.ndim >= 1:
             preds_init = predict_labels(outputs_init)
-            active = preds_init != y if targeted else preds_init == y
+            y_cmp = y.squeeze(1) if preds_init.ndim == 1 and y.ndim == 2 and y.shape[1] == 1 else y
+            active = preds_init != y_cmp if targeted else preds_init == y_cmp
         else:
+            y_cmp = y
             active = torch.ones(batch_size, device=x_clean.device, dtype=torch.bool)
 
         for it in range(1, max_queries):
@@ -412,7 +414,7 @@ def square_attack(
 
             if can_check_class_stop and outputs_cand.ndim >= 1:
                 preds_cand = predict_labels(outputs_cand)
-                solved = preds_cand == y[active_idx] if targeted else preds_cand != y[active_idx]
+                solved = preds_cand == y_cmp[active_idx] if targeted else preds_cand != y_cmp[active_idx]
                 if solved.any():
                     active[active_idx[solved]] = False
 

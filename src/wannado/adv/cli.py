@@ -234,8 +234,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "eject":
+        from wannado.adv.defenses import DEFENSE_EXPORTS, DEFENSE_METAS
+
         dest = eject_attack(args.attack_id, dest_dir=args.dest, custom_name=args.name, overwrite=args.overwrite)
-        print(f"Ejected standalone attack file to: {dest}")
+        kind = "defense" if (args.attack_id in DEFENSE_METAS or args.attack_id in DEFENSE_EXPORTS) else "attack"
+        print(f"Ejected standalone {kind} file to: {dest}")
         return 0
 
     if args.command == "scaffold":

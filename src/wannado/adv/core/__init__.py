@@ -23,12 +23,17 @@ from wannado.adv.core.projections import (
 from wannado.adv.core.types import AttackMeta, AttackResult, NormType
 from wannado.adv.core.utils import (
     DefendedModelWrapper,
+    NormalizedModelWrapper,
     SklearnModelAdapter,
     eval_mode,
+    infer_model_device,
     iter_eval_batches,
+    iter_train_batches,
     make_generator,
     materialize_eval_tensors,
+    squeeze_class_targets,
     update_best_by_objective,
+    wrap_normalized_model,
     wrap_sklearn_model,
 )
 
@@ -37,6 +42,7 @@ __all__ = [
     "AttackResult",
     "DefendedModelWrapper",
     "NormType",
+    "NormalizedModelWrapper",
     "SklearnModelAdapter",
     "adam_step_direction",
     "clamp_to_bounds",
@@ -44,7 +50,9 @@ __all__ = [
     "compute_attack_objective",
     "compute_perturbation_norm",
     "eval_mode",
+    "infer_model_device",
     "iter_eval_batches",
+    "iter_train_batches",
     "make_generator",
     "materialize_eval_tensors",
     "normalize_classification_logits",
@@ -56,8 +64,10 @@ __all__ = [
     "resolve_eps_budget",
     "resolve_loss_fn",
     "safe_l2_norm",
+    "squeeze_class_targets",
     "step_direction",
     "unwrap_model_outputs",
     "update_best_by_objective",
+    "wrap_normalized_model",
     "wrap_sklearn_model",
 ]

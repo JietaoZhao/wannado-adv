@@ -16,7 +16,6 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
-from torch import nn
 
 from wannado.adv.attacks import ATTACK_EXPORTS
 from wannado.adv.audit.carlini_auditor import AuditReport, audit_robustness
@@ -25,7 +24,12 @@ from wannado.adv.catalog.build_catalog import load_catalog
 from wannado.adv.core.losses import predict_labels, unwrap_model_outputs
 from wannado.adv.core.projections import compute_perturbation_norm, safe_l2_norm
 from wannado.adv.core.types import AttackMeta, AttackResult
-from wannado.adv.core.utils import DefendedModelWrapper, eval_mode, iter_eval_batches
+from wannado.adv.core.utils import (
+    DefendedModelWrapper,
+    eval_mode,
+    infer_model_device,
+    make_reiterable_eval_batches,
+)
 
 
 def _serialize_bounds(bounds: Any) -> Any:
@@ -357,12 +361,20 @@ class EvaluationReport:
                 lines.append(f"- **Automated Checks**: {chk_str}")
             sweep = self.audit.metrics.get("budget_sweep") if isinstance(self.audit.metrics, dict) else None
             if isinstance(sweep, dict) and sweep:
-                lines.append(
-                    "- **Budget Sweep Monotonicity**: "
-                    f"`eps={sweep.get('eps_low', 0):.4g} -> {sweep.get('acc_low', 0) * 100:.2f}%`, "
-                    f"`eps={sweep.get('eps_mid', 0):.4g} -> {sweep.get('acc_mid', 0) * 100:.2f}%`, "
-                    f"`eps={sweep.get('eps_high', 0):.4g} -> {sweep.get('acc_high', 0) * 100:.2f}%`"
-                )
+                if "acc_low" in sweep:
+                    lines.append(
+                        "- **Budget Sweep Monotonicity**: "
+                        f"`eps={sweep.get('eps_low', 0):.4g} -> {sweep.get('acc_low', 0) * 100:.2f}%`, "
+                        f"`eps={sweep.get('eps_mid', 0):.4g} -> {sweep.get('acc_mid', 0) * 100:.2f}%`, "
+                        f"`eps={sweep.get('eps_high', 0):.4g} -> {sweep.get('acc_high', 0) * 100:.2f}%`"
+                    )
+                elif "err_low" in sweep:
+                    lines.append(
+                        "- **Budget Sweep Monotonicity (Continuous Error)**: "
+                        f"`eps={sweep.get('eps_low', 0):.4g} -> {sweep.get('err_low', 0):.4g}`, "
+                        f"`eps={sweep.get('eps_mid', 0):.4g} -> {sweep.get('err_mid', 0):.4g}`, "
+                        f"`eps={sweep.get('eps_high', 0):.4g} -> {sweep.get('err_high', 0):.4g}`"
+                    )
             if self.audit.recommendations:
                 lines.extend(f"  - {rec}" for rec in self.audit.recommendations)
 
@@ -475,19 +487,6 @@ def _build_call_kwargs(
 _DATASET_LEVEL_ATTACKS = frozenset({"uap", "adv_patch", "gap", "advgan"})
 
 
-def _infer_target_device(
-    model_or_fn: Callable[[torch.Tensor], torch.Tensor],
-    first_x: torch.Tensor,
-    from_loader: bool,
-) -> torch.device:
-    if not from_loader:
-        return first_x.device
-    if isinstance(model_or_fn, nn.Module):
-        for p in model_or_fn.parameters():
-            return p.device
-    return first_x.device
-
-
 def _per_sample_mse(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     diff = (pred - target).reshape(pred.shape[0], -1)
     if diff.is_complex():
@@ -529,13 +528,16 @@ def evaluate_suite(
     verbose: bool = True,
 ) -> EvaluationReport:
     """Execute preflight, mini-batch/DataLoader attack suite, budget verification, Carlini audit, and paper reporting."""
-    from_loader = not isinstance(x, torch.Tensor)
-    raw_batches = list(iter_eval_batches(x, y, batch_size=batch_size, max_samples=max_samples))
-    if not raw_batches:
+    batch_iter = make_reiterable_eval_batches(x, y, batch_size=batch_size, max_samples=max_samples)
+    first_x: torch.Tensor | None = None
+    first_y: torch.Tensor | None = None
+    for xb_raw, yb_raw in batch_iter():
+        first_x, first_y = xb_raw, yb_raw
+        break
+    if first_x is None or first_y is None:
         raise ValueError("Evaluation input yielded zero samples.")
 
-    first_x, first_y = raw_batches[0]
-    eval_device = _infer_target_device(model_or_fn, first_x, from_loader=from_loader)
+    eval_device = infer_model_device(model_or_fn, first_x.device)
     is_complex = bool(first_x.is_complex())
     resolved_domain = domain or ("wireless" if is_complex else ("vision" if first_x.ndim == 4 else "tabular"))
     by_id = {c["id"]: c for c in load_catalog()}
@@ -545,7 +547,8 @@ def evaluate_suite(
         DefendedModelWrapper(model_or_fn, defense_fn) if defense_fn is not None else model_or_fn
     )
 
-    total_n = sum(int(xb.shape[0]) for xb, _ in raw_batches)
+    total_n = 0
+    num_chunks = 0
 
     # 1. Clean baseline pass (chunked to keep peak memory O(batch_size))
     is_classification = False
@@ -556,7 +559,9 @@ def evaluate_suite(
     clean_mse_applicable = True
 
     with eval_mode(deployed_victim), torch.no_grad():
-        for b_idx, (xb_raw, yb_raw) in enumerate(raw_batches):
+        for b_idx, (xb_raw, yb_raw) in enumerate(batch_iter()):
+            total_n += int(xb_raw.shape[0])
+            num_chunks += 1
             xb = xb_raw.to(eval_device)
             yb = yb_raw.to(eval_device)
             clean_out = unwrap_model_outputs(deployed_victim(xb))
@@ -632,7 +637,7 @@ def evaluate_suite(
         ax_list: list[torch.Tensor] = []
         ay_list: list[torch.Tensor] = []
         collected = 0
-        for xb_raw, yb_raw in raw_batches:
+        for xb_raw, yb_raw in batch_iter():
             take = min(xb_raw.shape[0], k_audit - collected)
             if take <= 0:
                 break
@@ -660,10 +665,11 @@ def evaluate_suite(
                 flush=True,
             )
 
-    # 4. Run each attack across chunks (or materialized dataset for universal/generative attacks)
+    # 4. Run each attack across chunks (or materialized dataset only for dataset-level attacks)
     records: list[AttackRunRecord] = []
     total_attacks = len(attacks)
     tol = 1e-2 if norm == "jsr_db" else max(1e-4, abs(eps) * 1e-3)
+    materialized_full: tuple[torch.Tensor, torch.Tensor] | None = None
 
     for idx, entry in enumerate(attacks, start=1):
         aid, fn, card = _resolve_attack_entry(entry, by_id)
@@ -690,17 +696,20 @@ def evaluate_suite(
 
         t0 = time.perf_counter()
         try:
-            if aid in _DATASET_LEVEL_ATTACKS and len(raw_batches) > 1:
-                exec_batches = [
-                    (
-                        torch.cat([xb for xb, _ in raw_batches], dim=0),
-                        torch.cat([yb for _, yb in raw_batches], dim=0),
-                    )
-                ]
+            if aid in _DATASET_LEVEL_ATTACKS and num_chunks > 1:
+                if materialized_full is None:
+                    xs_all, ys_all = [], []
+                    for xb_raw, yb_raw in batch_iter():
+                        xs_all.append(xb_raw)
+                        ys_all.append(yb_raw)
+                    materialized_full = (torch.cat(xs_all, dim=0), torch.cat(ys_all, dim=0))
+                exec_iter: Iterable[tuple[torch.Tensor, torch.Tensor]] = [materialized_full]
+                exec_chunks_count = 1
                 clean_preds_exec = [torch.cat(clean_preds_per_batch, dim=0)] if is_classification else []
                 clean_outs_exec = [torch.cat(clean_outs_per_batch, dim=0)] if not is_classification else []
             else:
-                exec_batches = raw_batches
+                exec_iter = batch_iter()
+                exec_chunks_count = num_chunks
                 clean_preds_exec = clean_preds_per_batch
                 clean_outs_exec = clean_outs_per_batch
 
@@ -717,7 +726,7 @@ def evaluate_suite(
             cos_sum = 0.0
             last_extra: dict[str, Any] = {}
 
-            for b_idx, (xb_raw, yb_raw) in enumerate(exec_batches):
+            for b_idx, (xb_raw, yb_raw) in enumerate(exec_iter):
                 xb = xb_raw.to(eval_device)
                 yb = yb_raw.to(eval_device)
                 chunk_kwargs = dict(call_kwargs)
@@ -805,8 +814,8 @@ def evaluate_suite(
                 if adv_mse_val is not None:
                     last_extra["adv_mse"] = adv_mse_val
 
-            if len(exec_batches) > 1:
-                last_extra["num_batches"] = len(exec_batches)
+            if exec_chunks_count > 1:
+                last_extra["num_batches"] = exec_chunks_count
 
             records.append(
                 AttackRunRecord(
