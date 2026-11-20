@@ -146,6 +146,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ver.add_argument("--no-curve", action="store_true", dest="no_curve")
     p_ver.add_argument("--seed", type=int, default=42)
     p_ver.add_argument("--out-dir", default="./adv_eval/outputs", dest="out_dir")
+    p_ver.add_argument("--baseline", default=None, dest="baseline", help="Prior verification_verdict.json for PR regression gating.")
+    p_ver.add_argument("--max-regression", type=float, default=0.02, dest="max_regression", help="Max allowed robust/clean accuracy drop vs baseline.")
+    p_ver.add_argument("--sarif", default=None, dest="sarif_path", help="Optional explicit SARIF 2.1.0 output path.")
+    p_ver.add_argument("--signing-key", default=None, dest="signing_key", help="Optional HMAC-SHA256 key to sign conformity_dossier.json.")
+    p_ver.add_argument("--check-backdoor", action="store_true", dest="check_backdoor", help="Run Neural Cleanse MAD + STRIP Trojan scan.")
+    p_ver.add_argument("--check-quant", action="store_true", dest="check_quant", help="Run simulated INT8 quantization-shift differential red-team.")
     p_ver.add_argument("--json", action="store_true", dest="as_json")
 
     # 11. arsenal
@@ -293,6 +299,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if pf.ok else 1
 
     if args.command == "verify":
+        quant_model = None
+        if args.check_quant:
+            import torch.nn as _nn
+
+            from wannado.adv.adapters.deployment import make_simulated_quantized_model
+            from wannado.adv.audit.verify_gate import _load_victim_from_interface
+
+            v_peek = _load_victim_from_interface(Path(args.interface_path), device=args.device, num_samples=args.samples)
+            if isinstance(v_peek.model_or_fn, _nn.Module):
+                quant_model = make_simulated_quantized_model(v_peek.model_or_fn, bits=8, mode="weight_int")
         rep = verify_robustness_gate(
             interface_path=args.interface_path,
             device=args.device,
@@ -308,6 +324,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             sweep_curve=not args.no_curve,
             seed=args.seed,
             out_dir=args.out_dir,
+            baseline_verdict_path=args.baseline,
+            max_robust_regression=args.max_regression,
+            max_clean_regression=args.max_regression,
+            sarif_path=args.sarif_path,
+            signing_key=args.signing_key,
+            run_backdoor_audit=args.check_backdoor,
+            quantized_model_or_fn=quant_model,
             verbose=not args.as_json,
         )
         print(json.dumps(rep.to_dict(), indent=2, ensure_ascii=False) if args.as_json else rep.format_report())
@@ -338,7 +361,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "preflight",
                 "audit_robustness (Carlini 2.0: stochasticity/EOT, BPDA, L1, regression)",
                 "auto_red_team (closed-loop adaptive escalation + Wilson 95% CI + AURC/eps50)",
-                "verify_robustness_gate (wannado-adv verify hard exit-code gate)",
+                "audit_backdoor (Neural Cleanse MAD + STRIP Trojan entropy scan)",
+                "audit_privacy (MIA Loss/Mentr + TPR@1%FPR + Black-Box Extraction probe)",
+                "audit_quantization_shift (FP32 vs FP16/INT8 deployment robustness differential)",
+                "verify_robustness_gate (wannado-adv verify + baseline regression + Conformity Dossier + SARIF 2.1.0)",
+            ],
+            "adapters": [
+                "OnnxModelAdapter / TorchScriptModelAdapter",
+                "DetectionAttackAdapter / SegmentationAttackAdapter / VLMEmbeddingAdapter",
+                "TabularConstraintProjector / TreeEnsembleAdapter (XGBoost/LightGBM/CatBoost/sklearn)",
+                "RF Over-the-Air (Spectral Mask, PAPR, OTA Rayleigh/Phase EoT)",
             ],
         }
         if args.as_json:

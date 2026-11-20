@@ -90,11 +90,30 @@ def export_citations(
         raise ValueError(f"Unsupported citation format '{fmt}'. Expected 'bibtex', 'ieee', or 'apa'.")
 
     by_id = {c["id"]: c for c in load_catalog()}
+    from wannado.adv.audit.backdoor_auditor import NEURAL_CLEANSE_CITATION, STRIP_CITATION
+    from wannado.adv.audit.privacy_auditor import (
+        CARLINI_LIRA_CITATION,
+        SONG_MENTR_CITATION,
+        TRAMER_EXTRACTION_CITATION,
+        YEOM_MIA_CITATION,
+    )
     from wannado.adv.defenses import DEFENSE_EXPORTS, DEFENSE_METAS
 
     for d_id, d_meta in DEFENSE_METAS.items():
         if d_id not in by_id:
             by_id[d_id] = d_meta.to_dict()
+
+    for audit_alias, audit_cit in (
+        ("neural_cleanse", NEURAL_CLEANSE_CITATION),
+        ("backdoor", NEURAL_CLEANSE_CITATION),
+        ("strip", STRIP_CITATION),
+        ("mia", YEOM_MIA_CITATION),
+        ("mentr", SONG_MENTR_CITATION),
+        ("lira", CARLINI_LIRA_CITATION),
+        ("privacy", SONG_MENTR_CITATION),
+        ("extraction", TRAMER_EXTRACTION_CITATION),
+    ):
+        by_id.setdefault(audit_alias, {"id": audit_alias, "citation": asdict(audit_cit)})
 
     seen: set[str] = set()
     entries: list[str] = []

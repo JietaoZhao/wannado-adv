@@ -2,6 +2,24 @@
 
 All notable changes to `wannado-adv` will be documented in this file.
 
+## [1.3.0] - 2026-11-20
+
+### Added
+- **Dual-Mode Conformity Dossier, Cryptographic Integrity, PR Regression Gate & SARIF 2.1.0 (`reporter/conformity.py`, `audit/verify_gate.py`, `cli.py`)**:
+  - Maps all evasion, Carlini 2.0 anti-masking, backdoor/Trojan, privacy/MIA, and quantization-shift findings to **NIST AI 100-2 (E2025)**, **MITRE ATLAS**, and **EU AI Act Article 15** clauses (`build_conformity_dossier`, `STANDARDS_MAPPING`).
+  - Seals `conformity_dossier.json` / `conformity_dossier.md` with deterministic SHA-256 model weight & eval-slice fingerprints, Git provenance, and optional HMAC-SHA256 signatures (`verify_dossier_integrity`).
+  - Exports valid **SARIF 2.1.0** (`export_sarif`, `wannado-adv verify --sarif`) for GitHub Code Scanning / GitLab Security tabs and adds stateful PR regression gating (`compare_verdicts`, `wannado-adv verify --baseline prev_verdict.json --max-regression 0.02`).
+- **EU AI Act Article 15 Multi-Pillar Threat Coverage — Backdoor/Trojan & Privacy/MIA Auditors (Zero SciPy)**:
+  - **`audit_backdoor` (`audit/backdoor_auditor.py`)**: Reverse-engineered trigger optimization with robust **Neural Cleanse MAD Anomaly Index** (Wang et al., IEEE S&P 2019) + **STRIP blending entropy & AUROC** (Gao et al., ACSAC 2019), wired into `verify --check-backdoor` and `export_citations`.
+  - **`audit_privacy` (`audit/privacy_auditor.py`)**: Loss-threshold & **Modified Prediction Entropy (Mentr)** Membership Inference Attacks (Yeom et al. 2018; Song & Mittal 2021) with **Carlini LiRA low-FPR tail leakage (`TPR @ 1% / 5% FPR`)** plus a **Black-Box Model Extraction surrogate fidelity probe** (Tramer et al. 2016).
+- **Production Runtime, Quantization-Shift, Non-Classifier & Physical RF Adapters (`wannado.adv.adapters`)**:
+  - **Deployment & Quantization-Shift (`adapters/deployment.py`)**: `OnnxModelAdapter` / `wrap_onnx_model`, `TorchScriptModelAdapter` / `wrap_torchscript_model`, `make_simulated_quantized_model` (INT4/INT8/FP16), and `audit_quantization_shift()` comparing FP32 vs quantized deployment robustness under transfer + direct black-box attacks (`verify --check-quant`).
+  - **Non-Classifier Tasks (`adapters/tasks.py`)**: `DetectionAttackAdapter` + `detection_vanishing_loss` + `evaluate_detection_robustness` (YOLO & torchvision detectors), `SegmentationAttackAdapter` + `compute_segmentation_metrics` (pixel acc & mIoU), `VLMEmbeddingAdapter` + `embedding_cosine_loss` (CLIP/SigLIP/VLM zero-shot & embedding hijacking), `TabularConstraintProjector` (immutable columns, integer grids, one-hot categorical groups, inequality/causal constraints + domain legality validator), and `TreeEnsembleAdapter` (`XGBoost`/`LightGBM`/`CatBoost`/`sklearn`).
+  - **Physical RF Over-the-Air Constraints (`adapters/rf_wireless.py`)**: FFT-domain `project_spectral_mask`, PA linearity `project_papr_constraint`, `measure_papr_db`, `measure_out_of_band_ratio`, and differentiable `over_the_air_eot_transform` (Rayleigh fading, carrier phase offset, AWGN) for `complex64` baseband models.
+- **Production-Scale Low-Cost Adversarial Hardening (`wannado.adv.defenses`)**:
+  - **`fast_adversarial_train` (`defenses/fast_at_wong2020.py`)**: Wong et al. (ICLR 2020) single-step random-init Fast-AT with built-in **Catastrophic Overfitting (CO) Guard** (multi-step PGD probe monitoring, automatic step-size halving, and best-checkpoint rollback).
+  - **`lora_adversarial_train` (`defenses/lora_awp_hardening.py`)**: Zero-dependency `LoRALinear` / `LoRAConv2d` + TRADES + **Adversarial Weight Perturbation (AWP)** hardening (`inject_lora_adapters`, `merge_lora_weights`) that freezes backbone weights, adapts low-rank parameters, and folds weights back cleanly for zero inference latency overhead.
+
 ## [1.2.2] - 2026-11-19
 
 ### Fixed

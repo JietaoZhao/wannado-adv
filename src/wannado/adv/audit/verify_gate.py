@@ -13,6 +13,11 @@ from typing import Any
 import torch
 
 from wannado.adv.audit.red_team import RedTeamReport, auto_red_team
+from wannado.adv.reporter.conformity import (
+    build_conformity_dossier,
+    compare_verdicts,
+    export_sarif,
+)
 from wannado.adv.workspace.interface_manager import VictimInterface
 
 
@@ -29,10 +34,22 @@ class AdvVerifyReport:
     summary: dict[str, Any] = field(default_factory=dict)
     saved_files: dict[str, str] = field(default_factory=dict)
     red_team: RedTeamReport | None = None
+    backdoor: Any | None = None
+    privacy: Any | None = None
+    quantization: Any | None = None
+    regression_diff: dict[str, Any] | None = None
+    dossier: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["red_team"] = self.red_team.to_dict() if self.red_team is not None else None
+        d["backdoor"] = self.backdoor.to_dict() if (self.backdoor is not None and hasattr(self.backdoor, "to_dict")) else self.backdoor
+        d["privacy"] = self.privacy.to_dict() if (self.privacy is not None and hasattr(self.privacy, "to_dict")) else self.privacy
+        d["quantization"] = (
+            self.quantization.to_dict()
+            if (self.quantization is not None and hasattr(self.quantization, "to_dict"))
+            else self.quantization
+        )
         return d
 
     def format_report(self) -> str:
@@ -109,6 +126,18 @@ def verify_robustness_gate(
     sweep_curve: bool = True,
     seed: int = 42,
     out_dir: str | Path | None = None,
+    baseline_verdict_path: str | Path | None = None,
+    max_robust_regression: float = 0.02,
+    max_clean_regression: float = 0.02,
+    sarif_path: str | Path | None = None,
+    emit_conformity_dossier: bool = True,
+    signing_key: str | bytes | None = None,
+    run_backdoor_audit: bool = False,
+    backdoor_steps: int = 40,
+    member_data: torch.Tensor | Iterable[tuple[torch.Tensor, torch.Tensor]] | None = None,
+    member_y: torch.Tensor | None = None,
+    quantized_model_or_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    max_quant_robust_drop: float = 0.05,
     verbose: bool = False,
 ) -> AdvVerifyReport:
     """Execute automated red-team verification gate and emit machine-readable pass/fail verdict."""
@@ -220,7 +249,63 @@ def verify_robustness_gate(
                 f"output_l2_drift_exceeded:{rt.worst_case_output_l2_drift:.4f}>{max_output_drift:.4f}"
             )
 
-    passed = all(checks.values()) and len(red_flags) == 0
+    # Optional Article 15 multi-pillar checks (Backdoor/Trojan, Privacy/MIA, Quantization-Shift)
+    backdoor_rep: Any | None = None
+    if run_backdoor_audit and rt.task_type == "classification" and not (
+        isinstance(x, torch.Tensor) and x.is_complex()
+    ):
+        from wannado.adv.audit.backdoor_auditor import audit_backdoor
+
+        backdoor_rep = audit_backdoor(
+            model_or_fn,
+            x,
+            y,
+            max_samples=min(samples, 64),
+            steps=backdoor_steps,
+            clip_bounds=clip_bounds,
+            seed=seed,
+        )
+        checks["backdoor_audit_ok"] = backdoor_rep.passed
+        if not backdoor_rep.passed:
+            red_flags.extend(backdoor_rep.red_flags)
+
+    privacy_rep: Any | None = None
+    if member_data is not None and rt.task_type == "classification":
+        from wannado.adv.audit.privacy_auditor import audit_privacy
+
+        privacy_rep = audit_privacy(
+            model_or_fn,
+            member_data,
+            x,
+            member_y=member_y,
+            non_member_y=y,
+            max_samples=min(samples, 256),
+            seed=seed,
+        )
+        checks["privacy_audit_ok"] = privacy_rep.passed
+        if not privacy_rep.passed:
+            red_flags.extend(privacy_rep.red_flags)
+
+    quant_rep: Any | None = None
+    if quantized_model_or_fn is not None and rt.task_type == "classification":
+        from wannado.adv.adapters.deployment import audit_quantization_shift
+
+        quant_rep = audit_quantization_shift(
+            model_or_fn,
+            quantized_model_or_fn,
+            x,
+            y,
+            eps=resolved_eps,
+            norm=resolved_norm,
+            clip_bounds=clip_bounds,
+            max_samples=min(samples, 64),
+            max_robust_drop=max_quant_robust_drop,
+            seed=seed,
+        )
+        checks["quantization_shift_ok"] = quant_rep.passed
+        if not quant_rep.passed:
+            red_flags.extend(quant_rep.red_flags)
+
     summary = {
         "task_type": rt.task_type,
         "clean_acc": rt.clean_acc,
@@ -238,6 +323,22 @@ def verify_robustness_gate(
         "worst_case_output_l2_drift": rt.worst_case_output_l2_drift,
     }
 
+    regression_diff: dict[str, Any] | None = None
+    if baseline_verdict_path is not None:
+        base_p = Path(baseline_verdict_path).resolve()
+        baseline_payload = json.loads(base_p.read_text(encoding="utf-8"))
+        regression_diff = compare_verdicts(
+            {"summary": summary},
+            baseline_payload,
+            max_robust_regression=max_robust_regression,
+            max_clean_regression=max_clean_regression,
+        )
+        checks["no_robustness_regression_ok"] = bool(regression_diff["passed"])
+        if not regression_diff["passed"]:
+            red_flags.extend(regression_diff["regressions"])
+
+    passed = all(checks.values()) and len(red_flags) == 0
+
     saved_files: dict[str, str] = {}
     verdict_obj = AdvVerifyReport(
         passed=passed,
@@ -249,12 +350,52 @@ def verify_robustness_gate(
         summary=summary,
         saved_files=saved_files,
         red_team=rt,
+        backdoor=backdoor_rep,
+        privacy=privacy_rep,
+        quantization=quant_rep,
+        regression_diff=regression_diff,
     )
+
+    dossier_obj = (
+        build_conformity_dossier(
+            verdict_obj,
+            backdoor_report=backdoor_rep,
+            privacy_report=privacy_rep,
+            quant_report=quant_rep,
+            model_or_fn=model_or_fn,
+            x_eval=x,
+            y_eval=y,
+            regression_diff=regression_diff,
+            signing_key=signing_key,
+        )
+        if emit_conformity_dossier
+        else None
+    )
+    if dossier_obj is not None:
+        verdict_obj.dossier = dossier_obj.to_dict()
 
     if out_dir is not None:
         out_root = Path(out_dir).resolve()
         saved = rt.save(out_root)
         saved_files = {k: str(v) for k, v in saved.items()}
+        if dossier_obj is not None:
+            d_json = out_root / "conformity_dossier.json"
+            d_md = out_root / "conformity_dossier.md"
+            d_json.write_text(dossier_obj.to_json(), encoding="utf-8")
+            d_md.write_text(dossier_obj.format_markdown(), encoding="utf-8")
+            saved_files["conformity_dossier_json"] = str(d_json)
+            saved_files["conformity_dossier_md"] = str(d_md)
+        sarif_out = Path(sarif_path).resolve() if sarif_path is not None else (out_root / "verification_report.sarif")
+        sarif_out.parent.mkdir(parents=True, exist_ok=True)
+        sarif_payload = export_sarif(
+            verdict_obj,
+            backdoor_report=backdoor_rep,
+            privacy_report=privacy_rep,
+            quant_report=quant_rep,
+            artifact_uri=target_name,
+        )
+        sarif_out.write_text(json.dumps(sarif_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        saved_files["sarif"] = str(sarif_out)
         verdict_path = out_root / "verification_verdict.json"
         saved_files["verification_verdict"] = str(verdict_path)
         verdict_obj.saved_files = saved_files
@@ -262,6 +403,18 @@ def verify_robustness_gate(
             json.dumps(verdict_obj.to_dict(), indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
+    elif sarif_path is not None:
+        sarif_out = Path(sarif_path).resolve()
+        sarif_out.parent.mkdir(parents=True, exist_ok=True)
+        sarif_payload = export_sarif(
+            verdict_obj,
+            backdoor_report=backdoor_rep,
+            privacy_report=privacy_rep,
+            quant_report=quant_rep,
+            artifact_uri=target_name,
+        )
+        sarif_out.write_text(json.dumps(sarif_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        verdict_obj.saved_files = {"sarif": str(sarif_out)}
 
     return verdict_obj
 

@@ -46,34 +46,32 @@ Do **NOT** stall the user behind multi-question forms when reasonable defaults c
   ```
   Edit ONLY that ejected single file (preserving `META.citation` and extension hooks) without modifying core library or project training code.
 
-## Step 3: Execute One-Click Autonomous Red-Team + Carlini 2.0 Verify Gate
+## Step 3: Execute One-Click Autonomous Red-Team, Multi-Pillar Audits & Conformity Verify Gate
 - **Never stop at `fgsm` or basic `pgd` and declare a model robust.**
-- Run the closed-loop verification gate directly from the terminal (hard exit code `0` = PASS, `1` = FAIL):
+- Run the deterministic verification gate directly from the terminal (hard exit code `0` = PASS, `1` = FAIL; exports `verification_verdict.json`, cryptographically sealed `conformity_dossier.json/.md` mapped to **NIST AI 100-2 / MITRE ATLAS / EU AI Act Article 15**, and **SARIF 2.1.0**):
   ```bash
-  wannado-adv verify --interface ./adv_eval/interface.py --goal standard --samples 100
+  wannado-adv verify --interface ./adv_eval/interface.py --goal standard --samples 100 \
+    --check-backdoor --check-quant --baseline ./prev_verdict.json --sarif ./adv_eval/outputs/report.sarif
   ```
-  or call `auto_red_team(...)` directly in Python (supports `DataLoader`, `batch_size`, `defense_fn`, `surrogate_fn`, continuous regression/DRL targets, and `complex64` wireless IQ):
-  ```python
-  from wannado.adv import auto_red_team
-  rt = auto_red_team(model, loader_or_x, y, eps=8/255, norm="linf", clip_bounds=(0.0, 1.0))
-  rt.save("./adv_eval/outputs")
-  ```
-- **What `auto_red_team()` + Carlini 2.0 automatically catches & breaks**:
-  - *Softmax / logit saturation* -> escalates scale-invariant `apgd_dlr` (or `apgd_l1(loss="dlr")`).
-  - *Non-differentiable / quantized preprocessing (`defense_fn`)* -> escalates `bpda_eot` + gradient-free `square_attack`.
-  - *Stochastic test-time defense / noise* -> detects output variance across repeats and escalates `eot_pgd`.
-  - *Hard-label-only / detached oracle* -> escalates decision-based `hopskipjump`.
-  - Computes **per-sample worst-case ensemble survival** with **Wilson 95% confidence intervals**, plus the **AURC / `eps_50` robustness decay curve** (`robustness_curve.png` / `.csv`).
+- **Multi-Pillar Security Audits (Zero SciPy)**:
+  - **Evasion & Anti-Masking (`auto_red_team` + Carlini 2.0)**: auto-escalates `apgd_dlr` (Softmax saturation), `bpda_eot` + `square_attack` (non-differentiable `defense_fn`), `eot_pgd` (stochasticity), `hopskipjump` (hard-label oracle), `apgd_l1` (L1 geometry), reporting worst-case ensemble survival, Wilson 95% CI, `AURC`, and `eps_50`.
+  - **Supply-Chain Backdoor/Trojan (`audit_backdoor`)**: Neural Cleanse MAD trigger optimization + STRIP blending entropy/AUROC.
+  - **Privacy & Extraction (`audit_privacy`)**: Loss & Modified-Entropy (Mentr) MIA with Carlini low-FPR `TPR@1%FPR` + black-box surrogate extraction fidelity.
+  - **Deployment Quantization-Shift (`audit_quantization_shift`)**: FP32 vs FP16/INT8/ONNX transfer + direct black-box robustness collapse detection.
+- **Beyond Classifiers (`wannado.adv.adapters`)**: Use `DetectionAttackAdapter` (`detection_vanishing_loss`), `SegmentationAttackAdapter` (`compute_segmentation_metrics`), `VLMEmbeddingAdapter` (`embedding_cosine_loss`), `TabularConstraintProjector` + `TreeEnsembleAdapter` (XGBoost/LightGBM/CatBoost/sklearn), `OnnxModelAdapter` / `TorchScriptModelAdapter`, and physical RF primitives (`project_spectral_mask`, `project_papr_constraint`, `over_the_air_eot_transform`).
 
 ## Step 4: Optional Closed-Loop Hardening & Certified L2 Robustness
-When the red-team gate fails (or the user asks to harden/certify the model), apply a single-file defense from `wannado.adv.defenses` — ZERO extra runtime dependencies (no SciPy):
-- **Empirical Adversarial Training**:
-  - `pgd_adversarial_train(model, train_loader, eps=..., norm=...)` — Madry et al. (ICLR 2018) min-max PGD-AT (works on vision, tabular, and `complex64` wireless `jsr_db`).
-  - `trades_train(model, train_loader, eps=..., beta=6.0, norm=...)` — Zhang et al. (ICML 2019) clean-vs-robust KL boundary trade-off.
-  - `mart_train(model, train_loader, eps=..., beta=5.0, norm=...)` — Wang et al. (ICLR 2020) margin-boosted misclassification-aware hardening.
+When the verification gate fails (or the user asks to harden/certify the model), apply a single-file defense from `wannado.adv.defenses` — ZERO extra runtime dependencies (no SciPy, no PEFT):
+- **Standard Empirical Adversarial Training**:
+  - `pgd_adversarial_train(model, train_loader, eps=..., norm=...)` — Madry et al. (ICLR 2018).
+  - `trades_train(model, train_loader, eps=..., beta=6.0, norm=...)` — Zhang et al. (ICML 2019).
+  - `mart_train(model, train_loader, eps=..., beta=5.0, norm=...)` — Wang et al. (ICLR 2020).
+- **Large-Backbone / Low-Cost Production Hardening**:
+  - `fast_adversarial_train(model, train_loader, eps=..., co_guard=True)` — Wong et al. (ICLR 2020) 1-step Fast-AT with built-in Catastrophic Overfitting monitor & rollback.
+  - `lora_adversarial_train(model, train_loader, rank=4, awp_gamma=0.005, merge_after_train=True)` — freezes backbone weights, adapts low-rank `LoRALinear`/`LoRAConv2d` with TRADES + AWP weight flattening, and merges weights back losslessly for zero inference overhead.
 - **Provable L2 Certification**:
-  - `gaussian_augmented_train(model, train_loader, sigma=0.25)` + `certify_randomized_smoothing(model, x_test, y_test, sigma=0.25, n0=100, n=1000, alpha=0.001)` — Cohen et al. (ICML 2019) exact Clopper–Pearson certified L2 radii $R = \sigma \Phi^{-1}(\underline{p_A})$.
-- **Mandatory Post-Hardening Re-Audit**: Immediately re-run `wannado-adv verify` (or `auto_red_team()` + `audit_robustness()`) on the hardened checkpoint to verify genuine robustness (`audit.passed == True`) rather than gradient masking!
+  - `gaussian_augmented_train(model, train_loader, sigma=0.25)` + `certify_randomized_smoothing(model, x_test, y_test, sigma=0.25, n0=100, n=1000, alpha=0.001)` — Cohen et al. (ICML 2019) exact Clopper–Pearson certified L2 radii.
+- **Mandatory Post-Hardening Re-Audit**: Immediately re-run `wannado-adv verify` on the hardened checkpoint to prove genuine robustness (`audit.passed == True`) and zero PR regression!
 
 ## Step 5: Zero-Jargon Reporting, Smart Clarification & Zero-Hallucination Citations
 - **Match the User's Language**: Communicate explanations, verdicts, and any needed questions naturally in the user's language (e.g., natural Chinese if chatting in Chinese).

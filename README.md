@@ -1,21 +1,22 @@
 # WannaDo Series: Autonomous AI Red-Teaming, Hardening & Certification Platform — `wannado-adv`
 
-> Part of the **WannaDo** human–AI collaborative scientific research platform · **Release `v1.2.2`**
+> Part of the **WannaDo** human–AI collaborative scientific research platform · **Release `v1.3.0`**
 
-[![Version](https://img.shields.io/badge/version-1.2.2-2563eb)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-1.3.0-2563eb)](pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-0f766e)](pyproject.toml)
 [![Attacks](https://img.shields.io/badge/attacks-35%20single--file-059669)](#quick-usage-python--cli)
-[![Defenses](https://img.shields.io/badge/defenses-4%20single--file%20%2B%20L2%20cert-7c3aed)](#quick-usage-python--cli)
+[![Defenses](https://img.shields.io/badge/defenses-6%20single--file%20%2B%20L2%20cert-7c3aed)](#quick-usage-python--cli)
 [![License: MIT](https://img.shields.io/badge/license-MIT-475569)](LICENSE)
 
-*"Hand your model to an AI agent for a complete, anti-fake-robustness red-team audit, hardening loop, and publication-ready dossier — in one command."*
+*"Hand your model to an AI agent for a complete, anti-fake-robustness red-team audit, multi-pillar security dossier (Evasion + Backdoor + Privacy + Quantization-Shift), hardening loop, and CI/publication pack — in one command."*
 
-`wannado-adv` is an **AI-native adversarial robustness platform** (`numpy` + `torch` only — **zero SciPy**) built around four core moats:
+`wannado-adv` is an **AI-native adversarial robustness & security verification platform** (`numpy` + `torch` only — **zero SciPy**) built around five core moats:
 
-1. **One-Click Autonomous Red-Teaming & Carlini 2.0 Verify Gate**: `auto_red_team()` and `wannado-adv verify` diagnose Softmax saturation, non-differentiable `defense_fn` preprocessing, test-time stochasticity, and hard-label-only oracles automatically — escalating matched attacks (`apgd_dlr`, `bpda_eot` + `square_attack`, `eot_pgd`, `hopskipjump`, `apgd_l1`), reporting true per-sample worst-case ensemble survival with **Wilson 95% confidence intervals** and **`AURC` / `eps_50`** decay curves, and returning hard CI/agent exit codes (`0` PASS / `1` FAIL).
-2. **Closed-Loop Single-File Hardening & Zero-SciPy L2 Certification**: Four standalone single-file defenses under `wannado.adv.defenses` — `pgd_adversarial_train` (Madry 2018), `trades_train` (Zhang 2019), `mart_train` (Wang 2020), and `certify_randomized_smoothing` (Cohen 2019, pure-Python Acklam inverse normal CDF + exact regularized incomplete beta Clopper–Pearson bounds) — designed to pair directly with Carlini 2.0 post-hardening re-audits so gradient masking cannot masquerade as robustness.
-3. **CleanRL-Style Single-File Modularity & Isolated Boundary**: All 35 attacks and 4 defenses live in transparent single `.py` files and plug into any project through ONE non-intrusive adapter (`adv_eval/interface.py` via `VictimInterface` with `DataLoader` / `batch_size` / `defense_fn` support). Need to adapt a new paper? `wannado-adv eject <attack_or_defense_id>` extracts that single file cleanly.
-4. **Hardwired Literature Provenance & Zero Citation Hallucination**: Verified paper metadata, BibTeX/IEEE/APA citations, and baseline-to-SOTA lineage live directly inside `META` + `registry.json` (`wannado-adv cite <ids>`), eliminating fabricated references across long agentic workflows.
+1. **One-Click Autonomous Red-Teaming, Carlini 2.0 & Tamper-Evident Conformity Gate**: `auto_red_team()` and `wannado-adv verify` diagnose Softmax saturation, non-differentiable `defense_fn` preprocessing, test-time stochasticity, and hard-label-only oracles automatically — escalating matched attacks (`apgd_dlr`, `bpda_eot` + `square_attack`, `eot_pgd`, `hopskipjump`, `apgd_l1`), reporting true per-sample worst-case ensemble survival with **Wilson 95% confidence intervals** and **`AURC` / `eps_50`** decay curves, blocking PR regressions (`--baseline`), exporting **SARIF 2.1.0**, and sealing SHA-256 / HMAC **NIST AI 100-2 / MITRE ATLAS / EU AI Act Article 15 Conformity Dossiers**.
+2. **Full EU AI Act Article 15 Threat Coverage (Evasion + Backdoor/Trojan + Privacy/MIA + Quantization-Shift)**: Beyond evasion, `audit_backdoor()` (Neural Cleanse MAD + STRIP blending entropy), `audit_privacy()` (Loss & Mentr MIA + Carlini low-FPR `TPR@1%FPR` + black-box model extraction probe), and `audit_quantization_shift()` (FP32 vs FP16/INT8 differential red-teaming) close supply-chain, confidentiality, and edge-deployment security gaps with zero SciPy.
+3. **Production-Scale Single-File Hardening & Zero-SciPy L2 Certification**: Six standalone single-file defenses under `wannado.adv.defenses` — `pgd_adversarial_train` (Madry 2018), `trades_train` (Zhang 2019), `mart_train` (Wang 2020), `fast_adversarial_train` (Wong 2020 + Catastrophic Overfitting guard), `lora_adversarial_train` (zero-dependency `LoRALinear`/`LoRAConv2d` + TRADES + AWP with lossless weight merging), and `certify_randomized_smoothing` (Cohen 2019 pure-Python Clopper–Pearson L2 bounds).
+4. **Beyond Classifiers — Real Production Models & Physical Constraints (`wannado.adv.adapters`)**: First-class adapters for **ONNX Runtime / TorchScript**, **Object Detection (YOLO / torchvision)**, **Semantic Segmentation (mIoU)**, **Multimodal VLM Encoders (CLIP / SigLIP embedding drift & hijacking)**, **Structured Tabular & Tree Ensembles** (`TabularConstraintProjector` with immutable/integer/one-hot/inequality constraints + `XGBoost`/`LightGBM`/`CatBoost`/`sklearn`), and **Physical RF Over-the-Air Constraints** (`complex64`, `jsr_db`, FFT spectral masks, PAPR clipping, Rayleigh/phase OTA EoT).
+5. **CleanRL-Style Single-File Modularity & Zero Citation Hallucination**: Every attack and defense lives in a transparent single `.py` file (`wannado-adv eject <id>`), plugs into any project through ONE isolated adapter (`adv_eval/interface.py`), and exports verbatim BibTeX/IEEE/APA citations (`wannado-adv cite <ids>`).
 
 > Domain-agnostic by design: supports standard `[0, 1]` vision models alongside native `torch.complex64` wireless baseband signals (`norm="jsr_db"`), tabular (per-feature bounds & immutable masks), time-series, continuous regression / DRL policies, and HuggingFace `ModelOutput` models.
 

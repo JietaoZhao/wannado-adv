@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wannado-adv"
-version = "1.2.2"
-description = "AI-native autonomous adversarial red-teaming, Carlini 2.0 auditing, single-file defenses, and certified L2 smoothing across CV, wireless RF, DRL, and tabular models."
+version = "1.3.0"
+description = "AI-native autonomous adversarial red-teaming, Carlini 2.0 + Backdoor + Privacy/MIA + Quantization-Shift auditing, conformity dossiers (NIST AI 100-2 / EU AI Act Art. 15 / SARIF), and single-file hardening across CV, detection/segmentation/VLM, wireless RF, DRL, and tabular models."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

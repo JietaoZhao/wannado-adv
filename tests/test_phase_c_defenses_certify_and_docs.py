@@ -271,7 +271,10 @@ class TestAdversarialTrainingDefenses(unittest.TestCase):
 class TestDefenseDiscoveryCitationsEjectionAndDocs(unittest.TestCase):
     def test_list_defenses_citations_eject_and_cli_arsenal(self) -> None:
         defs = list_defenses()
-        self.assertEqual({d["id"] for d in defs}, {"pgd_at", "trades", "mart", "randomized_smoothing"})
+        self.assertEqual(
+            {d["id"] for d in defs},
+            {"pgd_at", "trades", "mart", "fast_at", "lora_awp", "randomized_smoothing"},
+        )
 
         bib = export_citations(["pgd_at", "trades", "mart", "randomized_smoothing"], fmt="bibtex")
         for key in ("madry2018towards", "zhang2019theoretically", "wang2020improving", "cohen2019certified"):
@@ -296,7 +299,7 @@ class TestDefenseDiscoveryCitationsEjectionAndDocs(unittest.TestCase):
         self.assertEqual(rc, 0)
         payload = json.loads(buf.getvalue())
         self.assertEqual(payload["total_attacks"], 35)
-        self.assertEqual(payload["total_defenses"], 4)
+        self.assertEqual(payload["total_defenses"], 6)
         self.assertEqual(payload["version"], __version__)
 
         buf2 = io.StringIO()
@@ -342,7 +345,7 @@ class TestDefenseDiscoveryCitationsEjectionAndDocs(unittest.TestCase):
                 self.assertEqual(proc.returncode, 0, msg=f"{stmt}\n{proc.stderr}")
 
     def test_streamlined_agent_kit_and_version_sync(self) -> None:
-        self.assertEqual(__version__, "1.2.2")
+        self.assertEqual(__version__, "1.3.0")
         skill_text = (REPO_ROOT / "src" / "wannado" / "adv" / "agent_kit" / "SKILL.md").read_text(encoding="utf-8")
         agents_text = (
             REPO_ROOT / "src" / "wannado" / "adv" / "agent_kit" / "templates" / "AGENTS.md"
