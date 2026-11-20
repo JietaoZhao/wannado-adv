@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from wannado.adv.defenses.fast_at_wong2020 import META as FAST_AT_META
 from wannado.adv.defenses.fast_at_wong2020 import fast_adversarial_train
-
 from wannado.adv.defenses.lora_awp_hardening import META as LORA_AWP_META
 from wannado.adv.defenses.lora_awp_hardening import (
     LoRAConv2d,
